@@ -33,6 +33,7 @@ func pruneResetBackups(dir string, keep int) {
 func resetDefaults(previous model.AppState) model.AppState {
 	next := model.DefaultState()
 	next.Auth = previous.Auth
+	next.UpdateRepo = previous.UpdateRepo
 	next.Global.WanInterface = previous.Global.WanInterface
 	next.Global.LanInterfaces = append([]string(nil), previous.Global.LanInterfaces...)
 	next.Subscriptions = []model.Subscription{}

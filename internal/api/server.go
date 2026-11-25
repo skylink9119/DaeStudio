@@ -51,19 +51,20 @@ type loginBucket struct {
 }
 
 type Server struct {
-	initErr     error
-	loginWindow time.Time
-	loginByIP   map[string]*loginBucket
-	loginMu     sync.Mutex
-	mu          sync.RWMutex
-	changeMu    sync.Mutex
-	statePath   string
-	daeBin      string
-	mockMode    bool
-	state       model.AppState
-	mgr         *daemon.Manager
-	sessions    map[string]time.Time
-	webFS       fs.FS
+	initErr             error
+	loginWindow         time.Time
+	loginByIP           map[string]*loginBucket
+	loginMu             sync.Mutex
+	mu                  sync.RWMutex
+	changeMu            sync.Mutex
+	panelRestartPending bool
+	statePath           string
+	daeBin              string
+	mockMode            bool
+	state               model.AppState
+	mgr                 *daemon.Manager
+	sessions            map[string]time.Time
+	webFS               fs.FS
 }
 
 func NewServer(statePath, daeBin string, mockMode bool, mgr *daemon.Manager, webFS fs.FS) *Server {
@@ -78,6 +79,9 @@ func NewServer(statePath, daeBin string, mockMode bool, mgr *daemon.Manager, web
 	}
 	s.initErr = s.loadOrInitState()
 	if s.initErr == nil {
+		if !s.mockMode {
+			s.restorePanelSession()
+		}
 		s.syncTrackedEndpoints()
 		go s.runSubscriptionScheduler()
 	}
@@ -265,6 +269,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/doctor", s.withAuth(s.handleDoctor))
 	mux.HandleFunc("GET /api/v1/core/update", s.withAuth(s.handleCoreCheck))
 	mux.HandleFunc("POST /api/v1/core/update", s.withAuth(s.withChange(s.handleCoreInstall)))
+	mux.HandleFunc("GET /api/v1/panel/version", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"version": daemon.PanelVersion})
+	})
+	mux.HandleFunc("GET /api/v1/panel/update", s.withAuth(s.handlePanelCheck))
+	mux.HandleFunc("POST /api/v1/panel/repo", s.withAuth(s.withChange(s.handlePanelRepoSave)))
+	mux.HandleFunc("POST /api/v1/panel/update", s.withAuth(s.withChange(s.handlePanelInstall)))
 	mux.HandleFunc("GET /api/v1/connectivity", s.withAuth(s.handleConnectivity))
 	mux.HandleFunc("POST /api/v1/settings/reset", s.withAuth(s.withChange(s.handleResetDefaults)))
 	mux.HandleFunc("POST /api/v1/state", s.withAuth(s.withChange(s.handleSaveState)))
@@ -291,6 +301,7 @@ func (s *Server) Handler() http.Handler {
 				writeJSON(w, http.StatusNotFound, map[string]any{"error": "endpoint not found"})
 				return
 			}
+			w.Header().Set("Cache-Control", "no-cache")
 			fileServer.ServeHTTP(w, r)
 		})
 	}
@@ -354,7 +365,7 @@ func (s *Server) isValidSessionLocked(token string, now time.Time) bool {
 	if token == "" {
 		return false
 	}
-	exp, ok := s.sessions[token]
+	exp, ok := s.sessions[sha256Hex(token)]
 	return ok && exp.After(now)
 }
 
@@ -380,7 +391,7 @@ func (s *Server) mintSessionLocked() string {
 		delete(s.sessions, oldestKey)
 	}
 	tok := newToken()
-	s.sessions[tok] = now.Add(sessionTTL)
+	s.sessions[sha256Hex(tok)] = now.Add(sessionTTL)
 	return tok
 }
 
@@ -391,6 +402,10 @@ func (s *Server) withChange(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		defer s.changeMu.Unlock()
+		if s.panelRestartPending {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "面板正在重启，请稍后重试"})
+			return
+		}
 		if expected := r.Header.Get("If-Match"); expected != "" {
 			s.mu.RLock()
 			actual := s.state.Revision
@@ -648,12 +663,14 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 
 	cfg := compiler.RenderConfig(st)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"state":     clientState(st),
-		"revision":  st.Revision,
-		"configDae": cfg,
-		"stats":     s.mgr.Stats(),
-		"doctor":    daemon.RunSystemDoctor(s.daeBin, s.mockMode),
-		"logs":      s.mgr.Logs(),
+		"state":        clientState(st),
+		"revision":     st.Revision,
+		"panelVersion": daemon.PanelVersion,
+		"updateRepo":   daemon.EffectiveUpdateRepo(st.UpdateRepo),
+		"configDae":    cfg,
+		"stats":        s.mgr.Stats(),
+		"doctor":       daemon.RunSystemDoctor(s.daeBin, s.mockMode),
+		"logs":         s.mgr.Logs(),
 	})
 }
 
@@ -713,6 +730,129 @@ func (s *Server) handleCoreInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handlePanelCheck(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	savedRepo := s.state.UpdateRepo
+	s.mu.RUnlock()
+
+	repo := savedRepo
+	if q := strings.TrimSpace(r.URL.Query().Get("repo")); q != "" {
+		norm, err := daemon.NormalizeGitHubRepo(q)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "current": daemon.PanelVersion})
+			return
+		}
+		repo = norm
+	}
+
+	release, err := s.mgr.CheckPanel(r.Context(), repo)
+	if err != nil {
+		status := http.StatusBadGateway
+		if daemon.ErrRepoUnconfigured(err) {
+			status = http.StatusBadRequest
+		}
+		writeJSON(w, status, map[string]any{
+			"error":          err.Error(),
+			"current":        daemon.PanelVersion,
+			"repo":           daemon.EffectiveUpdateRepo(repo),
+			"needRepoConfig": daemon.ErrRepoUnconfigured(err),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, release)
+}
+
+func (s *Server) handlePanelRepoSave(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Repo string `json:"repo"`
+	}
+	if err := decodeJSONBody(w, r, smallBodyLimit, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "请求格式无效"})
+		return
+	}
+	norm, err := daemon.NormalizeGitHubRepo(req.Repo)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	s.mu.Lock()
+	previous := s.state.UpdateRepo
+	s.state.UpdateRepo = norm
+	if err := s.persistStateUnlocked(); err != nil {
+		s.state.UpdateRepo = previous
+		s.mu.Unlock()
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "保存更新仓库失败: " + err.Error()})
+		return
+	}
+	rev := s.state.Revision
+	s.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"repo":     daemon.EffectiveUpdateRepo(norm),
+		"revision": rev,
+	})
+}
+
+func (s *Server) handlePanelInstall(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	s.mu.RLock()
+	authEnabled := s.state.Auth.Enabled
+	savedRepo := s.state.UpdateRepo
+	token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+	valid := s.isValidSessionLocked(token, now)
+	s.mu.RUnlock()
+	if !authEnabled {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "请先启用面板登录鉴权后再执行在线升级"})
+		return
+	}
+	if !valid {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "需要重新登录", "authEnabled": true})
+		return
+	}
+	var req struct {
+		Version string `json:"version"`
+		Repo    string `json:"repo"`
+	}
+	if err := decodeJSONBody(w, r, smallBodyLimit, &req); err != nil || strings.TrimSpace(req.Version) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请选择要升级的面板版本"})
+		return
+	}
+	repo := daemon.EffectiveUpdateRepo(savedRepo)
+	if norm, err := daemon.NormalizeGitHubRepo(req.Repo); err != nil || (norm != "" && !strings.EqualFold(norm, repo)) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "更新仓库已变化，请重新检测已保存的更新源"})
+		return
+	}
+	version := strings.TrimSpace(req.Version)
+	if err := s.savePanelSession(token, version); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "无法保存升级会话"})
+		return
+	}
+	restartFn, err := s.mgr.StagePanelUpdate(r.Context(), repo, version)
+	if err != nil {
+		_ = os.Remove(s.panelSessionPath())
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"version":    strings.TrimSpace(req.Version),
+		"restarting": true,
+	})
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	s.panelRestartPending = true
+	go func() {
+		if err := restartFn(); err != nil {
+			s.changeMu.Lock()
+			s.panelRestartPending = false
+			_ = os.Remove(s.panelSessionPath())
+			s.changeMu.Unlock()
+		}
+	}()
 }
 
 func mergeSnapshotPayloads(next, prev []model.Snapshot) []model.Snapshot {
@@ -782,6 +922,7 @@ func (s *Server) saveCandidate(w http.ResponseWriter, state model.AppState, appl
 	s.mu.RUnlock()
 	candidate := state.Clone()
 	candidate.Auth = previous.Auth
+	candidate.UpdateRepo = previous.UpdateRepo
 	candidate.Snapshots = mergeSnapshotPayloads(candidate.Snapshots, previous.Snapshots)
 	if err := compiler.ValidateOutbounds(candidate); err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"ok": false, "error": err.Error()})
@@ -1147,6 +1288,7 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	newState.Auth = previous.Auth
+	newState.UpdateRepo = previous.UpdateRepo
 	newState.Snapshots = previous.Snapshots
 	if err := compiler.ValidateOutbounds(newState); err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
@@ -1293,6 +1435,7 @@ func (s *Server) handleRestoreSnapshot(w http.ResponseWriter, r *http.Request) {
 	var restored model.AppState
 	if targetSnap.StateJSON != "" && json.Unmarshal([]byte(targetSnap.StateJSON), &restored) == nil && restored.Version != "" {
 		restored.Auth = previous.Auth
+		restored.UpdateRepo = previous.UpdateRepo
 		restored.Snapshots = previous.Snapshots
 	} else {
 		var err error
@@ -1302,6 +1445,7 @@ func (s *Server) handleRestoreSnapshot(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		restored.Auth = previous.Auth
+		restored.UpdateRepo = previous.UpdateRepo
 		restored.Snapshots = previous.Snapshots
 	}
 

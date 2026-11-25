@@ -19,7 +19,13 @@ func main() {
 	configPath := flag.String("config", "/etc/dae/config.dae", "Target config.dae file path")
 	daeBin := flag.String("dae-bin", "dae", "Path or binary name of dae kernel")
 	mock := flag.Bool("mock", false, "Force Mock Kernel Mode for preview/testing without root or eBPF")
+	showVersion := flag.Bool("version", false, "Print DaeStudio version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("daed-next version %s\n", daemon.PanelVersion)
+		return
+	}
 
 	statePath := filepath.Join(*dataDir, "state.json")
 	mgr := daemon.NewManager(*daeBin, *configPath, *mock)
@@ -30,7 +36,7 @@ func main() {
 	}
 
 	fmt.Printf("============================================================\n")
-	fmt.Printf("  DaeStudio (daed-next) Control Plane Ready\n")
+	fmt.Printf("  DaeStudio (daed-next) %s Ready\n", daemon.PanelVersion)
 	fmt.Printf("  Listen URL  : http://localhost%s\n", *listen)
 	fmt.Printf("  State File  : %s\n", statePath)
 	fmt.Printf("  Config File : %s\n", *configPath)

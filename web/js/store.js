@@ -10,6 +10,8 @@ export const store = {
   theme: localStorage.getItem("daed_next_theme") || "dark",
 
   state: null,
+  panelVersion: "v1.0.2",
+  updateRepo: "",
   configDae: "",
   stats: {
     running: false,

@@ -13,7 +13,7 @@ func TestRoundTripDoesNotDuplicateSubNodesOrAutoRules(t *testing.T) {
 		{
 			ID:      "sub-airport-1",
 			Tag:     "airport_main",
-			Name:    "主力机场",
+			Name:    "主力订阅",
 			URL:     "https://sub.example.com/s",
 			Enabled: true,
 		},

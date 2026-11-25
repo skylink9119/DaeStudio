@@ -1295,12 +1295,27 @@ class DaeStudioHandler(SimpleHTTPRequestHandler):
                 200,
                 {
                     "state": st,
+                    "panelVersion": "v1.0.0",
+                    "updateRepo": st.get("updateRepo") or os.environ.get("DAED_NEXT_REPO", ""),
                     "configDae": render_config_dae(st),
                     "stats": self.ctx.stats(),
                     "doctor": self.ctx.doctor(),
                     "logs": logs,
                 },
             )
+            return
+        if path == "/api/v1/panel/update":
+            if not self._check_auth():
+                return
+            with self.ctx.lock:
+                repo = (self.ctx.state.get("updateRepo") or os.environ.get("DAED_NEXT_REPO") or "").strip()
+            q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            if q.get("repo"):
+                repo = q["repo"][0].strip()
+            if not repo:
+                self._send_json(400, {"error": "请先填写面板 GitHub 仓库地址（格式：owner/repo）", "current": "v1.0.0", "needRepoConfig": True})
+                return
+            self._send_json(200, {"current": "v1.0.0", "latest": "v1.0.0", "repo": repo, "url": f"https://github.com/{repo}/releases", "available": False, "installable": False})
             return
         if path == "/api/v1/stats":
             if not self._check_auth():
@@ -1567,6 +1582,17 @@ class DaeStudioHandler(SimpleHTTPRequestHandler):
                 self.ctx._save_unlocked(self.ctx.state)
                 st_copy = json.loads(json.dumps(self.ctx.state))
             self._send_json(200, {"ok": True, "state": st_copy, "configDae": render_config_dae(st_copy)})
+            return
+
+        if path == "/api/v1/panel/repo":
+            raw_repo = (req.get("repo") or "").strip()
+            raw_repo = re.sub(r"^https?://github\.com/", "", raw_repo).strip("/")
+            if raw_repo.endswith(".git"):
+                raw_repo = raw_repo[:-4]
+            with self.ctx.lock:
+                self.ctx.state["updateRepo"] = raw_repo
+                self.ctx._save_unlocked(self.ctx.state)
+            self._send_json(200, {"ok": True, "repo": raw_repo})
             return
 
         if path == "/api/v1/logs/clear":

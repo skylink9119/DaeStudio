@@ -143,6 +143,7 @@ start_service() {
     _ = init_bytes
 
     data_entries = [
+        ("usr/share/doc/daed-next/LICENSE", open(os.path.join(ROOT_DIR, "LICENSE"), "rb").read(), 0o644),
         ("usr/bin/daed-next", bin_bytes, 0o755),
         ("etc/init.d/daed-next", init_script, 0o755),
         ("usr/share/luci/menu.d/luci-app-daed-next.json", menu_bytes, 0o644),
@@ -156,6 +157,7 @@ start_service() {
         f"Package: luci-app-daed-next\n"
         f"Version: {VERSION}-1\n"
         f"Depends: libc\n"
+        f"License: MIT\n"
         f"Section: luci\n"
         f"Architecture: {pkg_arch}\n"
         f"Installed-Size: {installed_size}\n"
@@ -247,6 +249,7 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 """
     data_entries = [
+        ("usr/share/doc/daed-next/LICENSE", open(os.path.join(ROOT_DIR, "LICENSE"), "rb").read(), 0o644),
         ("usr/local/bin/daed-next", bin_bytes, 0o755),
         ("lib/systemd/system/daed-next.service", svc_bytes, 0o644),
     ]
@@ -305,6 +308,7 @@ exit 0
 def main() -> None:
     install_sh = open(os.path.join(ROOT_DIR, "scripts/install.sh"), "rb").read()
     uninstall_sh = open(os.path.join(ROOT_DIR, "scripts/uninstall.sh"), "rb").read()
+    license_txt = open(os.path.join(ROOT_DIR, "LICENSE"), "rb").read()
 
     amd64_bin = open(os.path.join(DIST_DIR, "daed-next-linux-amd64"), "rb").read()
     arm64_bin = open(os.path.join(DIST_DIR, "daed-next-linux-arm64"), "rb").read()
@@ -324,6 +328,7 @@ def main() -> None:
             "daed-next-linux-amd64": (amd64_bin, 0o755),
             "install.sh": (install_sh, 0o755),
             "uninstall.sh": (uninstall_sh, 0o755),
+            "LICENSE": (license_txt, 0o644),
         },
     )
     _bundle_tar_gz(
@@ -332,6 +337,7 @@ def main() -> None:
             "daed-next-linux-amd64": (amd64_bin, 0o755),
             "install.sh": (install_sh, 0o755),
             "uninstall.sh": (uninstall_sh, 0o755),
+            "LICENSE": (license_txt, 0o644),
         },
     )
     _bundle_tar_gz(
@@ -340,6 +346,7 @@ def main() -> None:
             "daed-next-linux-arm64": (arm64_bin, 0o755),
             "install.sh": (install_sh, 0o755),
             "uninstall.sh": (uninstall_sh, 0o755),
+            "LICENSE": (license_txt, 0o644),
         },
     )
     uni_files = {
@@ -347,6 +354,7 @@ def main() -> None:
         "daed-next-linux-arm64": (arm64_bin, 0o755),
         "install.sh": (install_sh, 0o755),
         "uninstall.sh": (uninstall_sh, 0o755),
+        "LICENSE": (license_txt, 0o644),
     }
     if x86_32_bin is not None:
         _bundle_tar_gz(
@@ -355,11 +363,19 @@ def main() -> None:
                 "daed-next-linux-386": (x86_32_bin, 0o755),
                 "install.sh": (install_sh, 0o755),
                 "uninstall.sh": (uninstall_sh, 0o755),
+                "LICENSE": (license_txt, 0o644),
             },
         )
         uni_files["daed-next-linux-386"] = (x86_32_bin, 0o755)
 
     _bundle_tar_gz(os.path.join(DIST_DIR, "daed-next-installer-universal.tar.gz"), uni_files)
+
+    if x86_32_bin is not None:
+        build_self_extracting_run(
+            os.path.join(DIST_DIR, "daed-next-installer-x86_32.run"),
+            os.path.join(DIST_DIR, "daed-next-installer-x86_32.tar.gz"),
+            "x86_32 / i386",
+        )
 
     # 2. Self-extracting .run packages (iStoreOS Manual Install & 1-file CLI install)
     build_self_extracting_run(

@@ -24,13 +24,31 @@ jobs:
           go vet ./...
           go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
       - name: Cross-compile binaries & package installers
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          make build-all
-          sh ./scripts/package_release.sh
+          VER="v1.0.0"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || exit 1
+            VER="$RELEASE_TAG"
+          fi
+          VERSION="$VER" DEFAULT_REPO="$GH_REPO" make build-all
+          DAED_NEXT_VERSION="${VER#v}" sh ./scripts/package_release.sh
           cd dist
-          sha256sum daed-next-linux-* *.tar.gz *.ipk *.deb *.run > SHA256SUMS
-      - name: Upload GitHub Release Assets
+          sha256sum daed-next-linux-* daed-next-openwrt-mipsle *.tar.gz *.ipk *.deb *.run > SHA256SUMS
+      - name: Check for an existing release
         if: startsWith(github.ref, 'refs/tags/')
+        id: release_status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload GitHub Release Assets
+        if: startsWith(github.ref, 'refs/tags/') && steps.release_status.outputs.exists != 'true'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
@@ -42,6 +60,7 @@ jobs:
             dist/luci-app-daed-next_*_x86_64.ipk
             dist/luci-app-daed-next_*_x86_32.ipk
             dist/luci-app-daed-next_*_arm64.ipk
+            dist/daed-next-installer-x86_32.run
             dist/daed-next-installer-x86_64.run
             dist/daed-next-installer-arm64.run
             dist/daed-next_*_amd64.deb
@@ -53,5 +72,6 @@ jobs:
             dist/daed-next-installer-arm64.tar.gz
             dist/daed-next-installer-universal.tar.gz
             dist/SHA256SUMS
+            LICENSE
             scripts/install.sh
             scripts/uninstall.sh

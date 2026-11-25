@@ -43,13 +43,15 @@ function applyTheme(theme) {
   document.documentElement.setAttribute("data-theme", store.theme);
   localStorage.setItem("daed_next_theme", store.theme);
   const btn = document.getElementById("btn-theme");
-  if (btn) btn.textContent = store.theme === "dark" ? "浅色" : "深色";
+  if (btn) btn.textContent = store.theme === "dark" ? "☀ 浅色" : "☾ 深色";
 }
 
 async function loadBootstrap() {
   try {
     const data = await apiFetch("/api/v1/bootstrap");
     store.state = normalizeState(data.state);
+    store.panelVersion = data.panelVersion || store.panelVersion || "v1.0.2";
+    store.updateRepo = data.updateRepo ?? store.state?.updateRepo ?? "";
     store.configDae = data.configDae || "";
     store.stats = data.stats || store.stats;
     store.doctor = data.doctor || null;
@@ -57,6 +59,7 @@ async function loadBootstrap() {
     store.dirty = false;
     chart.push(store.stats.uploadBps, store.stats.downloadBps);
 
+    setText("side-panel-ver", store.panelVersion);
     const verLine = (store.doctor?.daeVersion || "dae").split("\n")[0].replace("dae version ", "");
     setText("side-dae-ver", verLine);
 
@@ -349,6 +352,11 @@ function bindGlobalEvents() {
     applyTheme(store.theme === "dark" ? "light" : "dark");
   });
 
+  document.getElementById("side-panel-ver")?.addEventListener("click", () => {
+    store.systemSubTab = "logs";
+    switchTab("system");
+  });
+
   document.getElementById("btn-save-apply")?.addEventListener("click", () => saveState(true));
   document.getElementById("modal-close")?.addEventListener("click", closeModal);
   document.getElementById("modal-overlay")?.addEventListener("click", (e) => {
@@ -541,9 +549,9 @@ function renderOverview(root) {
                 </div>
               </div>
               <div class="outbound-controls">
-                <label class="source-control">机场
-                  <select class="select select-sm" aria-label="机场" data-grp-source="${gIdx}">
-                    <option value="">选择机场…</option>
+                <label class="source-control">订阅源
+                  <select class="select select-sm" aria-label="订阅源" data-grp-source="${gIdx}">
+                    <option value="">选择订阅源…</option>
                     ${usableSubs.map((sub) => `<option value="${escapeHTML(sub.id)}" ${grp.filter?.subIds?.[0] === sub.id ? "selected" : ""}>${escapeHTML(sub.name || sub.tag)}</option>`).join("")}
                   </select>
                 </label>
@@ -815,7 +823,7 @@ function renderProxiesAndSubs(root) {
     <div class="section-top">
       <div>
         <h1 class="section-title">节点与订阅</h1>
-        <p class="section-sub">支持机场远程订阅自动转换（Clash / Sing-box / Base64 / V2Ray / Shadowrocket）与手动单节点管理</p>
+        <p class="section-sub">支持多格式远程订阅自动转换（Clash / Sing-box / Base64 / V2Ray / Shadowrocket）与手动单节点管理</p>
       </div>
       <div class="toolbar">
         <button class="btn btn-sm" id="px-btn-add-sub">添加订阅源</button>
@@ -834,7 +842,7 @@ function renderProxiesAndSubs(root) {
       </div>
       ${
         subs.length === 0
-          ? `<div class="empty-box" style="padding:22px;">暂无远程订阅源，可点击右上角「添加订阅源」导入机场订阅。</div>`
+          ? `<div class="empty-box" style="padding:22px;">暂无远程订阅源，可点击右上角「添加订阅源」导入节点订阅。</div>`
           : `<div class="table-wrap">
               <table class="data-table">
                 <thead>
@@ -1089,7 +1097,7 @@ function openSubModal(existing) {
       <div class="form-grid">
         <div class="field">
           <label class="field-label">订阅名称</label>
-          <input id="m-sub-name" class="input" value="${escapeHTML(s.name)}" placeholder="主力机场" />
+          <input id="m-sub-name" class="input" value="${escapeHTML(s.name)}" placeholder="主力订阅" />
         </div>
         <div class="field">
           <label class="field-label">内部标识 Tag</label>
@@ -2708,20 +2716,136 @@ function bindCoreUpdate(container) {
   });
 }
 
+function bindPanelUpdate(container) {
+  const checkBtn = container.querySelector("#panel-check");
+  const installBtn = container.querySelector("#panel-install");
+  const statusEl = container.querySelector("#panel-update-status");
+  const releaseLink = container.querySelector("#panel-release-link");
+  let latestVersion = "";
+  let checkedRepo = "";
+
+  checkBtn?.addEventListener("click", async () => {
+    checkBtn.disabled = true;
+    installBtn.classList.add("hidden");
+    releaseLink.classList.add("hidden");
+    try {
+      statusEl.textContent = "正在查询 DaeStudio 最新版本…";
+      const release = await apiFetch("/api/v1/panel/update", { timeoutMs: 25000 });
+      if (release.error) throw new Error(release.error);
+      latestVersion = release.latest;
+      checkedRepo = release.repo;
+      releaseLink.href = release.url;
+      releaseLink.classList.remove("hidden");
+      if (release.available) {
+        statusEl.textContent = `当前 ${release.current} · 发现新版本 ${latestVersion}`;
+        if (release.installable && store.state.auth?.enabled) {
+          installBtn.classList.remove("hidden");
+        } else if (release.installable) {
+          statusEl.textContent += " · 启用面板登录鉴权后可一键升级";
+        } else {
+          statusEl.textContent += " · 当前环境请下载安装包手动升级";
+        }
+      } else {
+        statusEl.textContent = `当前 ${release.current} · 已是最新正式版`;
+      }
+    } catch (err) {
+      statusEl.textContent = "检测提示：" + err.message;
+    } finally {
+      checkBtn.disabled = false;
+    }
+  });
+
+  installBtn?.addEventListener("click", () => {
+    if (store.dirty) {
+      toast("请先保存并应用面板中的未保存改动", "error");
+      return;
+    }
+    openModal({
+      title: `升级 DaeStudio 至 ${latestVersion}`,
+      bodyHTML: `
+        <div style="font-size:15px;line-height:1.65;color:var(--text-sec);">
+          系统将下载对应架构二进制，核对 GitHub Release 摘要及 <code class="mono">SHA256SUMS</code> 并完成可执行文件自检后自动平滑重启面板服务。升级仅支持由独立服务管理的 dae。
+        </div>
+      `,
+      footerHTML: `
+        <button class="btn" id="m-p-cancel">取消</button>
+        <button class="btn btn-primary" id="m-p-ok">确认下载并升级</button>
+      `,
+      onMount(box) {
+        box.querySelector("#m-p-cancel")?.addEventListener("click", closeModal);
+        box.querySelector("#m-p-ok")?.addEventListener("click", async () => {
+          closeModal();
+          installBtn.disabled = true;
+          checkBtn.disabled = true;
+          statusEl.textContent = "正在下载新版面板并校验 SHA-256…";
+          try {
+            const res = await apiFetch("/api/v1/panel/update", {
+              method: "POST",
+              timeoutMs: 180000,
+              body: JSON.stringify({ version: latestVersion, repo: checkedRepo }),
+            });
+            if (!res.ok) throw new Error(res.error || "面板升级未完成");
+            installBtn.classList.add("hidden");
+            statusEl.textContent = `已写入 ${latestVersion}，正在平滑重启面板服务…`;
+            for (let attempt = 0; attempt < 18; attempt++) {
+              await new Promise((r) => setTimeout(r, 1500));
+              try {
+                const boot = await apiFetch("/api/v1/panel/version", { timeoutMs: 2000 });
+                if (boot?.version === latestVersion) {
+                  window.location.reload();
+                  return;
+                }
+              } catch (_) {}
+            }
+            statusEl.textContent = `已替换二进制，但尚未检测到 ${latestVersion} 上线，请检查面板服务日志`;
+          } catch (err) {
+            statusEl.textContent = "升级结果：" + err.message;
+          } finally {
+            installBtn.disabled = false;
+            checkBtn.disabled = false;
+          }
+        });
+      },
+    });
+  });
+}
+
 function renderSysLogs(container) {
   const checks = store.doctor?.checks || [];
 
   container.innerHTML = `
-    <div class="panel">
-      <div class="panel-head">
-        <div>
-          <div class="panel-title">dae 内核更新</div>
-          <div id="core-update-status" class="section-sub" aria-live="polite">${escapeHTML((store.doctor?.daeVersion || "").split("\n")[0])}</div>
+    <div class="split-2">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span class="panel-title">DaeStudio 面板更新</span>
+              <span class="tag tag-primary mono">${escapeHTML(store.panelVersion || "v1.0.2")}</span>
+            </div>
+            <div id="panel-update-status" class="section-sub" aria-live="polite">当前版本 ${escapeHTML(store.panelVersion || "v1.0.2")} · 支持在线检测与 SHA-256 校验升级</div>
+          </div>
+          <div class="toolbar">
+            <a id="panel-release-link" class="btn btn-sm hidden" target="_blank" rel="noopener noreferrer">发行说明</a>
+            <button class="btn btn-sm" id="panel-check">检测更新</button>
+            <button class="btn btn-primary btn-sm hidden" id="panel-install">一键升级</button>
+          </div>
         </div>
-        <div class="toolbar">
-          <a id="core-release-link" class="btn btn-sm hidden" target="_blank" rel="noopener noreferrer">发行说明</a>
-          <button class="btn btn-sm" id="core-check">检查更新</button>
-          <button class="btn btn-primary btn-sm hidden" id="core-install">下载并安装</button>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">dae 内核更新</div>
+            <div id="core-update-status" class="section-sub" aria-live="polite">${escapeHTML((store.doctor?.daeVersion || "").split("\n")[0])}</div>
+          </div>
+          <div class="toolbar">
+            <a id="core-release-link" class="btn btn-sm hidden" target="_blank" rel="noopener noreferrer">发行说明</a>
+            <button class="btn btn-sm" id="core-check">检查更新</button>
+            <button class="btn btn-primary btn-sm hidden" id="core-install">下载并安装</button>
+          </div>
+        </div>
+        <div style="padding:11px 20px;background:var(--bg-subtle);font-size:13px;color:var(--text-muted);">
+          自动同步官方 <span class="mono">daeuniverse/dae</span> 稳定版内核并校验配置兼容性
         </div>
       </div>
     </div>
@@ -2760,6 +2884,7 @@ function renderSysLogs(container) {
     </div>
   `;
 
+  bindPanelUpdate(container);
   bindCoreUpdate(container);
   renderLogsListDOM();
 

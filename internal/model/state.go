@@ -7,6 +7,7 @@ type AppState struct {
 	Version       string         `json:"version"`
 	Revision      string         `json:"revision"`
 	UpdatedAt     string         `json:"updatedAt"`
+	UpdateRepo    string         `json:"updateRepo,omitempty"`
 	Auth          AuthConfig     `json:"auth"`
 	Global        GlobalConfig   `json:"global"`
 	Subscriptions []Subscription `json:"subscriptions"`

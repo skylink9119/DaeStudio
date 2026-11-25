@@ -130,7 +130,7 @@ func TestSessionExpiryAndAuthUpdateRevocation(t *testing.T) {
 
 	// Force-expire the new token and verify 401
 	srv.mu.Lock()
-	srv.sessions[authResp.Token] = time.Now().Add(-time.Minute)
+	srv.sessions[sha256Hex(authResp.Token)] = time.Now().Add(-time.Minute)
 	srv.mu.Unlock()
 	expBoot := doJSON(t, h, http.MethodGet, "/api/v1/bootstrap", nil, map[string]string{
 		"Authorization": "Bearer " + authResp.Token,
@@ -423,3 +423,42 @@ routing {
 	}
 }
 
+func TestPanelVersionAndUpdateRepoAndAuthGate(t *testing.T) {
+	srv, h, _, _ := newTestServer(t)
+
+	bootRec := doJSON(t, h, http.MethodGet, "/api/v1/bootstrap", nil, nil)
+	var boot map[string]any
+	_ = json.Unmarshal(bootRec.Body.Bytes(), &boot)
+	if bootRec.Code != http.StatusOK || boot["panelVersion"] != daemon.PanelVersion {
+		t.Fatalf("expected panelVersion %q in bootstrap, got %v", daemon.PanelVersion, boot["panelVersion"])
+	}
+
+	// Unconfigured repo check returns 400 with needRepoConfig
+	chkUnconf := doJSON(t, h, http.MethodGet, "/api/v1/panel/update", nil, nil)
+	if chkUnconf.Code != http.StatusBadRequest || !strings.Contains(chkUnconf.Body.String(), `"needRepoConfig":true`) {
+		t.Fatalf("expected 400 needRepoConfig when repo unset, got %d %s", chkUnconf.Code, chkUnconf.Body.String())
+	}
+
+	// Reject malformed repo
+	badRepo := doJSON(t, h, http.MethodPost, "/api/v1/panel/repo", map[string]string{"repo": "invalid_repo_slug"}, nil)
+	if badRepo.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid repo slug, got %d", badRepo.Code)
+	}
+
+	// Save full GitHub URL and verify normalized owner/repo persists across reset
+	saveRepo := doJSON(t, h, http.MethodPost, "/api/v1/panel/repo", map[string]string{"repo": "https://github.com/skybyte/daed-next/releases"}, nil)
+	if saveRepo.Code != http.StatusOK || srv.state.UpdateRepo != "skybyte/daed-next" {
+		t.Fatalf("expected normalized repo skybyte/daed-next, got %d %q", saveRepo.Code, srv.state.UpdateRepo)
+	}
+
+	resetRec := doJSON(t, h, http.MethodPost, "/api/v1/settings/reset", map[string]string{"confirm": "RESET"}, nil)
+	if resetRec.Code != http.StatusOK || srv.state.UpdateRepo != "skybyte/daed-next" {
+		t.Fatalf("expected UpdateRepo preserved across reset, got %d %q", resetRec.Code, srv.state.UpdateRepo)
+	}
+
+	// Panel self-update must reject installation when Auth.Enabled == false (403)
+	instNoAuth := doJSON(t, h, http.MethodPost, "/api/v1/panel/update", map[string]string{"version": "v1.0.1"}, nil)
+	if instNoAuth.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 when auth disabled on /api/v1/panel/update, got %d", instNoAuth.Code)
+	}
+}

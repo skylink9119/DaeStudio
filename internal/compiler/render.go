@@ -286,7 +286,7 @@ func ValidateOutbounds(st model.AppState) error {
 		}
 		count := len(MatchNodesForGroup(group, nodes))
 		if count == 0 {
-			return fmt.Errorf("策略组 %s 没有匹配的启用节点，请选择节点或机场后再应用", group.Name)
+			return fmt.Errorf("策略组 %s 没有匹配的启用节点，请选择节点或订阅源后再应用", group.Name)
 		}
 		if group.Policy == "fixed" && (group.FixedIndex < 0 || group.FixedIndex >= count) {
 			return fmt.Errorf("策略组 %s 的固定节点序号超出范围，请重新选择", group.Name)
