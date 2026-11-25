@@ -31,21 +31,15 @@ func pruneResetBackups(dir string, keep int) {
 }
 
 func resetDefaults(previous model.AppState) model.AppState {
-	next := model.DefaultState()
+	next := model.ProductionDefaults()
 	next.Auth = previous.Auth
 	next.UpdateRepo = previous.UpdateRepo
 	next.Global.WanInterface = previous.Global.WanInterface
 	next.Global.LanInterfaces = append([]string(nil), previous.Global.LanInterfaces...)
 	next.Subscriptions = []model.Subscription{}
 	next.Nodes = []model.Node{}
-	next.Groups = []model.Group{}
 	next.Snapshots = previous.Clone().Snapshots
-	next.Routing = model.RoutingConfig{Mode: "visual", Fallback: "direct", Rules: []model.RoutingRule{}}
-	next.DNS = model.DNSConfig{
-		Mode: "visual", Bind: previous.DNS.Bind,
-		Upstreams:       []model.DNSUpstream{{Tag: "cndns", URL: "udp://223.5.5.5:53"}},
-		RequestFallback: "cndns", ResponseFallback: "accept",
-	}
+	next.DNS.Bind = previous.DNS.Bind
 	return next
 }
 

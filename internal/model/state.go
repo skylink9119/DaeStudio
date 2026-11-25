@@ -4,18 +4,19 @@ import "time"
 
 // AppState represents the complete persisted configuration & runtime metadata of daed-next.
 type AppState struct {
-	Version       string         `json:"version"`
-	Revision      string         `json:"revision"`
-	UpdatedAt     string         `json:"updatedAt"`
-	UpdateRepo    string         `json:"updateRepo,omitempty"`
-	Auth          AuthConfig     `json:"auth"`
-	Global        GlobalConfig   `json:"global"`
-	Subscriptions []Subscription `json:"subscriptions"`
-	Nodes         []Node         `json:"nodes"`
-	Groups        []Group        `json:"groups"`
-	DNS           DNSConfig      `json:"dns"`
-	Routing       RoutingConfig  `json:"routing"`
-	Snapshots     []Snapshot     `json:"snapshots"`
+	DirectWithoutNodes bool           `json:"directWithoutNodes,omitempty"`
+	Version            string         `json:"version"`
+	Revision           string         `json:"revision"`
+	UpdatedAt          string         `json:"updatedAt"`
+	UpdateRepo         string         `json:"updateRepo,omitempty"`
+	Auth               AuthConfig     `json:"auth"`
+	Global             GlobalConfig   `json:"global"`
+	Subscriptions      []Subscription `json:"subscriptions"`
+	Nodes              []Node         `json:"nodes"`
+	Groups             []Group        `json:"groups"`
+	DNS                DNSConfig      `json:"dns"`
+	Routing            RoutingConfig  `json:"routing"`
+	Snapshots          []Snapshot     `json:"snapshots"`
 }
 
 type AuthConfig struct {

@@ -216,6 +216,21 @@ func hasPin(group model.Group) bool {
 
 // ValidateOutbounds catches missing/disabled group references and empty managed groups
 // that dae either rejects with opaque errors or accepts syntactically without usable nodes.
+// runtimeState keeps the public template editable while no nodes are available.
+func runtimeState(st model.AppState) model.AppState {
+	if !st.DirectWithoutNodes || len(EnabledNodes(st)) > 0 {
+		return st
+	}
+	st.Groups = nil
+	st.Routing = model.RoutingConfig{Mode: "visual", Fallback: "direct"}
+	st.DNS = model.DNSConfig{
+		Mode: "visual", Bind: st.DNS.Bind,
+		Upstreams:       []model.DNSUpstream{{Tag: "cndns", URL: "https://223.5.5.5/dns-query"}},
+		RequestFallback: "cndns", ResponseFallback: "accept",
+	}
+	return st
+}
+
 func ValidateOutbounds(st model.AppState) error {
 	nodes := EnabledNodes(st)
 	builtinOutbounds := map[string]bool{
@@ -266,6 +281,10 @@ func ValidateOutbounds(st model.AppState) error {
 		if !builtinOutbounds[ob] && !enabledGroups[ob] && !enabledGroups[sanitizeIdentifier(ob)] {
 			return fmt.Errorf("分流规则引用了不存在或已停用的策略组 %q，请先将关联规则调整到有效出口", ob)
 		}
+	}
+
+	if st.DirectWithoutNodes && len(nodes) == 0 {
+		return nil
 	}
 
 	for _, group := range st.Groups {
@@ -365,6 +384,7 @@ func RenderRoutingRuleExpr(r model.RoutingRule) string {
 
 // RenderConfig compiles the full AppState into a standard, well-commented config.dae document.
 func RenderConfig(st model.AppState) string {
+	st = runtimeState(st)
 	var b strings.Builder
 	activeNodes := EnabledNodes(st)
 	aliases := nodeAliases(activeNodes)

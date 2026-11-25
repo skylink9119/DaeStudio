@@ -1,0 +1,311 @@
+{
+  "global": {
+    "wanInterface": "auto",
+    "lanInterfaces": [
+      "br-lan"
+    ],
+    "dialMode": "domain++",
+    "logLevel": "warn",
+    "tproxyPort": 12345,
+    "tproxyPortProtect": true,
+    "soMarkFromDae": 0,
+    "allowInsecure": false,
+    "autoConfigKernelParameter": true,
+    "checkInterval": "60s",
+    "checkTolerance": "50ms",
+    "tcpCheckUrl": "http://cp.cloudflare.com,1.1.1.1,2606:4700:4700::1111",
+    "tcpCheckHttpMethod": "HEAD",
+    "udpCheckDns": "dns.google:53,8.8.8.8,2001:4860:4860::8888",
+    "sniffingTimeout": "100ms",
+    "tlsImplementation": "tls",
+    "utlsImitate": "chrome_auto",
+    "mptcp": false,
+    "disableWaitingNetwork": false
+  },
+  "dns": {
+    "mode": "visual",
+    "bind": "127.0.0.1:15353",
+    "ipVersionPrefer": 4,
+    "upstreams": [
+      {
+        "tag": "cndns",
+        "url": "https://223.5.5.5:443/dns-query"
+      },
+      {
+        "tag": "fallbackdns",
+        "url": "https://1.1.1.1/dns-query"
+      }
+    ],
+    "requestRules": [
+      {
+        "id": "default-dns-1",
+        "enabled": true,
+        "expr": "qname(full:amdc.m.taobao.com, full:amdcopen.m.taobao.com, full:tce.alicdn.com)",
+        "target": "cndns",
+        "comment": "淘宝误杀豁免"
+      },
+      {
+        "id": "default-dns-2",
+        "enabled": true,
+        "expr": "qname(geosite:ximalaya, suffix:ximalaya.com, suffix:xmcdn.com)",
+        "target": "cndns",
+        "comment": "保留喜马拉雅兼容性白名单"
+      },
+      {
+        "id": "default-dns-3",
+        "enabled": false,
+        "expr": "qname(geosite:category-ads-all)",
+        "target": "reject",
+        "comment": "广告解析拦截"
+      },
+      {
+        "id": "default-dns-4",
+        "enabled": true,
+        "expr": "qname(suffix:googleapis.cn, suffix:xn--ngstr-lra8j.com)",
+        "target": "fallbackdns",
+        "comment": "特定 Google 域名使用国外 DNS"
+      },
+      {
+        "id": "default-dns-5",
+        "enabled": true,
+        "expr": "qname(suffix:youtube.com, suffix:youtu.be, suffix:googlevideo.com, suffix:ytimg.com, suffix:youtubei.googleapis.com, suffix:youtube.googleapis.com)",
+        "target": "fallbackdns",
+        "comment": "YouTube 页面及视频域名使用海外 DNS"
+      },
+      {
+        "id": "default-dns-6",
+        "enabled": true,
+        "expr": "qname(geosite:cn)",
+        "target": "cndns",
+        "comment": "国内域名使用国内 DNS"
+      }
+    ],
+    "requestFallback": "fallbackdns",
+    "responseRules": null,
+    "responseFallback": "accept",
+    "rawDsl": ""
+  },
+  "routing": {
+    "mode": "visual",
+    "rules": [
+      {
+        "id": "default-route-1",
+        "enabled": true,
+        "name": "校时流量直连",
+        "category": "direct",
+        "conditions": [
+          {
+            "negate": false,
+            "field": "l4proto",
+            "value": "udp"
+          },
+          {
+            "negate": false,
+            "field": "dport",
+            "value": "123"
+          }
+        ],
+        "outbound": "direct"
+      },
+      {
+        "id": "default-route-2",
+        "enabled": true,
+        "name": "局域网、组播及广播直连",
+        "category": "direct",
+        "conditions": [
+          {
+            "negate": false,
+            "field": "dip",
+            "value": "224.0.0.0/3, 'ff00::/8'"
+          }
+        ],
+        "outbound": "direct"
+      },
+      {
+        "id": "default-route-3",
+        "enabled": true,
+        "name": "私有网络直连",
+        "category": "direct",
+        "conditions": [
+          {
+            "negate": false,
+            "field": "dip",
+            "value": "geoip:private"
+          }
+        ],
+        "outbound": "direct"
+      },
+      {
+        "id": "default-route-4",
+        "enabled": true,
+        "name": "网络管理进程直连",
+        "category": "system",
+        "conditions": [
+          {
+            "negate": false,
+            "field": "pname",
+            "value": "netifd, odhcp6c"
+          }
+        ],
+        "outbound": "direct"
+      },
+      {
+        "id": "default-route-5",
+        "enabled": true,
+        "name": "固定 DNS 上游出口",
+        "category": "direct",
+        "conditions": [
+          {
+            "negate": false,
+            "field": "dip",
+            "value": "223.5.5.5, 114.114.114.114"
+          }
+        ],
+        "outbound": "direct"
+      },
+      {
+        "id": "default-route-6",
+        "enabled": true,
+        "name": "Cloudflare DNS 经代理访问",
+        "category": "custom",
+        "conditions": [
+          {
+            "negate": false,
+            "field": "dip",
+            "value": "1.1.1.1"
+          }
+        ],
+        "outbound": "proxy"
+      },
+      {
+        "id": "default-route-7",
+        "enabled": true,
+        "name": "淘宝误杀豁免",
+        "category": "direct",
+        "conditions": [
+          {
+            "negate": false,
+            "field": "domain",
+            "value": "full:amdc.m.taobao.com, full:amdcopen.m.taobao.com, full:tce.alicdn.com"
+          }
+        ],
+        "outbound": "direct"
+      },
+      {
+        "id": "default-route-8",
+        "enabled": true,
+        "name": "与 DNS 中的喜马拉雅白名单保持一致",
+        "category": "direct",
+        "conditions": [
+          {
+            "negate": false,
+            "field": "domain",
+            "value": "geosite:ximalaya, suffix:ximalaya.com, suffix:xmcdn.com"
+          }
+        ],
+        "outbound": "direct"
+      },
+      {
+        "id": "default-route-9",
+        "enabled": false,
+        "name": "广告连接拦截",
+        "category": "block",
+        "conditions": [
+          {
+            "negate": false,
+            "field": "domain",
+            "value": "geosite:category-ads-all"
+          }
+        ],
+        "outbound": "block"
+      },
+      {
+        "id": "default-route-10",
+        "enabled": true,
+        "name": "特定 Google 域名优先代理",
+        "category": "custom",
+        "conditions": [
+          {
+            "negate": false,
+            "field": "domain",
+            "value": "suffix:googleapis.cn, suffix:xn--ngstr-lra8j.com"
+          }
+        ],
+        "outbound": "proxy"
+      },
+      {
+        "id": "default-route-11",
+        "enabled": true,
+        "name": "YouTube 页面与视频流走流媒体策略组",
+        "category": "media",
+        "conditions": [
+          {
+            "negate": false,
+            "field": "domain",
+            "value": "suffix:youtube.com, suffix:youtu.be, suffix:googlevideo.com, suffix:ytimg.com, suffix:youtubei.googleapis.com, suffix:youtube.googleapis.com"
+          }
+        ],
+        "outbound": "streaming"
+      },
+      {
+        "id": "default-route-12",
+        "enabled": true,
+        "name": "国内域名及国内 IP 直连",
+        "category": "direct",
+        "conditions": [
+          {
+            "negate": false,
+            "field": "domain",
+            "value": "geosite:cn"
+          }
+        ],
+        "outbound": "direct"
+      },
+      {
+        "id": "default-route-13",
+        "enabled": true,
+        "name": "国内 IP 直连",
+        "category": "direct",
+        "conditions": [
+          {
+            "negate": false,
+            "field": "dip",
+            "value": "geoip:cn"
+          }
+        ],
+        "outbound": "direct"
+      }
+    ],
+    "fallback": "proxy",
+    "rawDsl": ""
+  },
+  "version": "1.0.0",
+  "auth": {
+    "enabled": false,
+    "username": "admin"
+  },
+  "subscriptions": [],
+  "nodes": [],
+  "snapshots": [],
+  "directWithoutNodes": true,
+  "groups": [
+    {
+      "id": "grp-proxy",
+      "name": "proxy",
+      "description": "自动选择可用节点",
+      "enabled": true,
+      "policy": "min_moving_avg",
+      "mode": "smart",
+      "filter": {}
+    },
+    {
+      "id": "grp-streaming",
+      "name": "streaming",
+      "description": "流媒体自动选路，可单独指定出口",
+      "enabled": true,
+      "policy": "min_moving_avg",
+      "mode": "smart",
+      "filter": {}
+    }
+  ]
+}

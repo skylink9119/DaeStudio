@@ -27,7 +27,7 @@ func TestResetRequiresConfirmationAndPreservesBackup(t *testing.T) {
 	s.mu.RLock()
 	state := s.state.Clone()
 	s.mu.RUnlock()
-	if len(state.Nodes) != 0 || len(state.Groups) != 0 || len(state.Subscriptions) != 0 || state.Routing.Fallback != "direct" {
+	if len(state.Nodes) != 0 || len(state.Groups) != 2 || len(state.Subscriptions) != 0 || state.Routing.Fallback != "proxy" {
 		t.Fatal("reset defaults wrong")
 	}
 	if len(state.Snapshots) == 0 || state.Snapshots[0].StateJSON == "" {

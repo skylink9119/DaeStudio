@@ -2494,7 +2494,7 @@ function openResetDefaultsModal() {
     title: "恢复默认设置",
     bodyHTML: `
       <div style="background:var(--warn-bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:11px 14px;font-size:15px;line-height:1.65;">
-        恢复后将清空订阅、节点和策略组，重置 DNS 与分流为直连基础配置。登录账号、网卡绑定和 DNS 监听地址会保留。系统会自动生成恢复备份快照，正在运行的代理将重新加载。
+        恢复后将清空订阅和节点，恢复通用 DNS、国内外分流及自动选路策略。无节点时直连，导入节点并保存应用后启用代理。登录账号、网卡绑定和 DNS 监听地址会保留。系统会自动生成恢复备份快照，正在运行的代理将重新加载。
       </div>
       <div class="field full">
         <label class="field-label">请输入 <code class="mono">RESET</code> 确认执行</label>
@@ -2531,11 +2531,11 @@ function openResetDefaultsModal() {
           store.dirty = false;
           store.selectedGroupIdx = 0;
           document.getElementById("unsaved-indicator")?.classList.add("hidden");
-          setApplyStatus("已恢复默认直连配置", "success");
+          setApplyStatus("已恢复通用默认配置", "success");
           closeModal();
           syncHeader();
           renderPage();
-          toast("已恢复默认直连配置，原配置可在备份快照中恢复", "success");
+          toast("已恢复通用默认配置，原配置可在备份快照中恢复", "success");
         } catch (err) {
           toast("恢复默认设置失败：" + err.message, "error");
           okBtn.disabled = false;

@@ -205,7 +205,7 @@ func TestReleaseDNSRebindingAndSubscriptionProxyGuard(t *testing.T) {
 func TestProductionInitialStateContainsNoDemoCredentials(t *testing.T) {
 	s := &Server{}
 	state := s.initialState()
-	if len(state.Nodes) != 0 || len(state.Subscriptions) != 0 || len(state.Groups) != 0 || state.Routing.Fallback != "direct" {
+	if len(state.Nodes) != 0 || len(state.Subscriptions) != 0 || len(state.Groups) != 2 || state.Routing.Fallback != "proxy" {
 		t.Fatal("production initialized with demo traffic")
 	}
 }
