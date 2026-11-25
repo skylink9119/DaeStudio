@@ -35,6 +35,7 @@ jobs:
           fi
           VERSION="$VER" DEFAULT_REPO="$GH_REPO" make build-all
           DAED_NEXT_VERSION="${VER#v}" sh ./scripts/package_release.sh
+          python3 tests/test_release_packages.py
           cd dist
           sha256sum daed-next-linux-* daed-next-openwrt-mipsle *.tar.gz *.ipk *.deb *.run > SHA256SUMS
       - name: Check for an existing release

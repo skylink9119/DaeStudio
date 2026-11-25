@@ -122,3 +122,12 @@ python3 ./tests/test_suite.py
 安装包不包含订阅、节点凭据或个人出口地址。导入节点或订阅后，点击「保存并应用」即可使用默认分流。没有启用节点时，运行配置使用直连和国内 DNS，面板保留完整分流模板。默认 LAN 接口为 br-lan，其他拓扑需要在界面选择实际 LAN 接口。
 
 恢复默认设置会清空节点和订阅，并恢复上述模板；原配置会自动备份。已有配置在覆盖安装时继续使用原有设置。
+
+
+### v1.0.4 内置 dae 内核
+
+ARM64、x86_64、x86_32 的 .run、.tar.gz、.ipk 和 .deb 安装包均内置官方 dae v2.1.3、geoip.dat 和 geosite.dat，通用离线包包含全部三个架构。安装包可以离线安装面板及内核，完成后导入节点并保存应用即可启用代理。设备仍需要具备 dae 所需的 Linux 内核和 eBPF 能力。
+
+正式面板不提供模拟模式参数，也不会在内核缺失时生成模拟运行状态或流量。单独下载面板二进制时，需要另外安装 dae；全新安装应使用完整安装包。
+
+DaeStudio 使用 MIT 协议。内置 dae 的协议见 DAE-LICENSE，安装包同时携带 dae-source.tar.gz、CORE-NOTICE.txt 和官方发行文件的 SHA-256 清单 dae-core.json，安装到 /usr/share/doc/daed-next。构建脚本根据 scripts/dae-core.json 校验官方内核文件。

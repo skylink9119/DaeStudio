@@ -72,13 +72,9 @@ type Manager struct {
 }
 
 func NewManager(daeBin, configPath string, forceMock bool) *Manager {
-	isMock := forceMock || runtime.GOOS != "linux"
-	if !isMock {
-		if path, err := exec.LookPath(daeBin); err == nil {
-			daeBin = path
-		} else {
-			isMock = true
-		}
+	isMock := forceMock
+	if path, err := exec.LookPath(daeBin); err == nil {
+		daeBin = path
 	}
 	_, initErr := os.Stat("/etc/init.d/dae")
 	m := &Manager{

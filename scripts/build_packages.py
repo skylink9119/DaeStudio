@@ -16,8 +16,31 @@ import time
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST_DIR = os.path.join(ROOT_DIR, "dist")
-VERSION = os.environ.get("DAED_NEXT_VERSION", "1.0.3")
+VERSION = os.environ.get("DAED_NEXT_VERSION", "1.0.4")
 MTIME = int(time.time())
+
+
+CORE_DIR = os.path.join(DIST_DIR, "core")
+
+
+def core_files(arch):
+    names = [f"dae-linux-{arch}", "geoip.dat", "geosite.dat",
+             "DAE-LICENSE", "CORE-NOTICE.txt", "dae-source.tar.gz", "dae-core.json"]
+    return {name: (open(os.path.join(CORE_DIR, name), "rb").read(),
+                   0o755 if name.startswith("dae-linux-") else 0o644) for name in names}
+
+
+def core_package_entries(arch):
+    entries = []
+    for name, (data, mode) in core_files(arch).items():
+        if name.startswith("dae-linux-"):
+            target = "usr/bin/dae"
+        elif name.endswith(".dat"):
+            target = "usr/share/dae/" + name
+        else:
+            target = "usr/share/doc/daed-next/" + name
+        entries.append((target, data, mode))
+    return entries
 
 
 def _tar_bytes(entries: list[tuple[str, bytes, int]], fmt=tarfile.USTAR_FORMAT) -> bytes:
@@ -60,6 +83,10 @@ def _tar_bytes(entries: list[tuple[str, bytes, int]], fmt=tarfile.USTAR_FORMAT) 
 
 
 def _bundle_tar_gz(out_path: str, files: dict[str, tuple[bytes, int]]) -> None:
+    files = dict(files)
+    for arch in ("amd64", "386", "arm64"):
+        if f"daed-next-linux-{arch}" in files:
+            files.update(core_files(arch))
     raw_buf = io.BytesIO()
     with tarfile.open(fileobj=raw_buf, mode="w", format=tarfile.USTAR_FORMAT) as tf:
         di = tarfile.TarInfo(name="daed-next-install")
@@ -150,6 +177,8 @@ start_service() {
         ("usr/share/rpcd/acl.d/luci-app-daed-next.json", acl_bytes, 0o644),
         ("www/luci-static/resources/view/daed-next/main.js", view_bytes, 0o644),
     ]
+    # Include the matching official core and routing databases.
+    data_entries.extend(core_package_entries({"x86_64": "amd64", "i386_pentium4": "386", "all": "arm64"}[pkg_arch]))
     data_tgz = _tar_bytes(data_entries)
     installed_size = sum(len(x[1]) for x in data_entries)
 
@@ -157,7 +186,7 @@ start_service() {
         f"Package: luci-app-daed-next\n"
         f"Version: {VERSION}-1\n"
         f"Depends: libc\n"
-        f"License: MIT\n"
+        f"License: MIT AND AGPL-3.0-only\n"
         f"Section: luci\n"
         f"Architecture: {pkg_arch}\n"
         f"Installed-Size: {installed_size}\n"
@@ -167,6 +196,7 @@ start_service() {
 
     postinst = b"""#!/bin/sh
 [ -n "${IPKG_INSTROOT}" ] && exit 0
+/usr/bin/dae --version >/dev/null || exit 1
 mkdir -p /etc/dae/daed-next
 if [ -f /etc/dae/config.dae ] && [ ! -f /etc/dae/config.dae.orig_bak ]; then
     cp -p /etc/dae/config.dae /etc/dae/config.dae.orig_bak
@@ -253,8 +283,9 @@ WantedBy=multi-user.target
         ("usr/local/bin/daed-next", bin_bytes, 0o755),
         ("lib/systemd/system/daed-next.service", svc_bytes, 0o644),
     ]
+    data_entries.extend(core_package_entries({"amd64": "amd64", "i386": "386", "arm64": "arm64"}[deb_arch]))
     data_tgz = _tar_bytes(data_entries, fmt=tarfile.GNU_FORMAT)
-    installed_kb = max(1, (len(bin_bytes) + len(svc_bytes)) // 1024)
+    installed_kb = max(1, sum(len(entry[1]) for entry in data_entries) // 1024)
 
     control_text = (
         f"Package: daed-next\n"
@@ -269,6 +300,7 @@ WantedBy=multi-user.target
 
     postinst = b"""#!/bin/sh
 set -e
+/usr/bin/dae --version >/dev/null || exit 1
 mkdir -p /etc/dae/daed-next
 if [ -f /etc/dae/config.dae ] && [ ! -f /etc/dae/config.dae.orig_bak ]; then
     cp -p /etc/dae/config.dae /etc/dae/config.dae.orig_bak

@@ -79,11 +79,35 @@ else
     exit 1
 fi
 
-# Check whether dae core is installed
-if ! command -v dae >/dev/null 2>&1 && [ ! -x /usr/bin/dae ]; then
-    echo "[提示] 当前系统尚未检测到 /usr/bin/dae 内核。"
-    echo "       面板仍可正常安装启动，请后续通过 opkg/apk 或官方包安装 dae 核心。"
+# Install the bundled core before starting the panel.
+CORE_SRC="$SCRIPT_DIR/dae-linux-$ARCH"
+if [ ! -f "$CORE_SRC" ]; then
+    echo "[错误] 安装目录缺少 dae 内核，请下载 v1.0.4 或更新版本的完整安装包。"
+    exit 1
 fi
+chmod 0755 "$CORE_SRC"
+"$CORE_SRC" --version
+for asset in geoip.dat geosite.dat DAE-LICENSE CORE-NOTICE.txt dae-source.tar.gz dae-core.json; do
+    if [ ! -s "$SCRIPT_DIR/$asset" ]; then
+        echo "[错误] 安装包缺少 $asset"; exit 1
+    fi
+done
+mkdir -p /usr/bin /usr/share/dae /usr/share/doc/daed-next
+# Same-directory rename permits replacing an executable that is still running.
+CORE_TMP="$(mktemp /usr/bin/.dae-install.XXXXXX)"
+cp "$CORE_SRC" "$CORE_TMP"
+chmod 0755 "$CORE_TMP"
+mv "$CORE_TMP" /usr/bin/dae
+for asset in geoip.dat geosite.dat; do
+    DATA_TMP="$(mktemp /usr/share/dae/.data-install.XXXXXX)"
+    cp "$SCRIPT_DIR/$asset" "$DATA_TMP"
+    chmod 0644 "$DATA_TMP"
+    mv "$DATA_TMP" "/usr/share/dae/$asset"
+done
+for asset in DAE-LICENSE CORE-NOTICE.txt dae-source.tar.gz dae-core.json; do
+    cp "$SCRIPT_DIR/$asset" "/usr/share/doc/daed-next/$asset"
+    chmod 0644 "/usr/share/doc/daed-next/$asset"
+done
 
 # Backup existing config.dae safely if present
 mkdir -p /etc/dae/daed-next
