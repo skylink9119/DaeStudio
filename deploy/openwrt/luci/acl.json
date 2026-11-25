@@ -1,0 +1,10 @@
+{
+  "luci-app-daed-next": {
+    "description": "Grant access to DaeStudio (daed-next) LuCI view",
+    "read": {
+      "ubus": {
+        "luci": ["*"]
+      }
+    }
+  }
+}

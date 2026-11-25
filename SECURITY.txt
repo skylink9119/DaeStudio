@@ -1,0 +1,33 @@
+DaeStudio security review — 2026-11-25
+
+Scope
+Go API/authentication, subscriptions, state/config persistence, snapshots/reset,
+core update downloads, traffic counters, browser rendering, installers and release CI.
+This is a source review and automated testing, not a guarantee of absence of vulnerabilities.
+
+Release fixes
+- Build with Go 1.27.4. The older Go 1.26.2 toolchain produced 22 reachable standard-library advisories in govulncheck; the updated source scan reports no known vulnerabilities.
+- Block arbitrary hostname access to unauthenticated APIs to mitigate DNS rebinding. Use the router IP while password protection is disabled.
+- Revalidate authentication after obtaining the configuration mutation lock; reject credentials changed during password verification. Bound concurrent login work and login rate-limit map size.
+- Subscription transport never uses environment HTTP proxies, so actual destination IP checks cannot be delegated away. Close idle transports after fetches.
+- Bound JSON-body read time and disable caching of API responses. Send nosniff header.
+- Bounded worker launches for probes/DNS lookups; evict removed traffic-cache hosts and address keys, throttle failed DNS refreshes, reject overflowing byte counters.
+- Fresh production state contains no demo subscriptions or demo nodes. Mock previews retain sample data.
+- Download installer uses a private mktemp directory and verifies SHA256SUMS before installing. Configuration backups have mode 0600.
+- ARM64 IPK pre-install checks CPU architecture despite broad OpenWrt package metadata compatibility.
+- Python preview restricted to localhost; it is not a production server.
+- State writes fsync file contents before atomic replacement.
+- CI pins external actions to commit hashes and runs race tests, vet and govulncheck before release.
+
+Operational boundary
+The panel controls a root-running proxy engine. Administrators are trusted to edit native dae configuration, including powerful native directives. This is not multi-tenant isolation.
+Enable panel password protection before sharing access. Default password-disabled LAN access still trusts LAN devices; IP restriction is not authentication. Reverse proxies can make remote clients appear local: enable authentication before using them.
+Serve through a trusted HTTPS reverse proxy or SSH tunnel for untrusted networks. The standalone HTTP server does not encrypt passwords or bearer tokens in transit.
+Core downloads trust the official dae GitHub release over HTTPS; release checksum files detect corruption but are not independent publisher signatures.
+Traffic counters are endpoint estimates, not authoritative per-node accounting when nodes share an endpoint.
+
+Verification
+Go race tests, go vet and existing Python regression suite; subscription fuzzing over 360,000 executions; targeted guards for DNS rebinding, proxy bypass, default credentials, counter overflow, cache cleanup and login concurrency. Shell syntax and Python compilation checks.
+No production config reset, destructive network tests or power-loss fault injection performed during this publication review.
+
+Report security issues privately to the repository maintainer. Do not attach live subscription URLs, node passwords, state.json or full config.dae to public issues.

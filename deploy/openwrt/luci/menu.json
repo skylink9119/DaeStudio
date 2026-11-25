@@ -1,0 +1,15 @@
+{
+  "admin/services/daed-next": {
+    "title": "DaeStudio 面板",
+    "order": 15,
+    "action": {
+      "type": "view",
+      "path": "daed-next/main"
+    },
+    "depends": {
+      "acl": [
+        "luci-app-daed-next"
+      ]
+    }
+  }
+}

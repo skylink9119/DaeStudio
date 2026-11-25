@@ -1,0 +1,16 @@
+[Unit]
+Description=DaeStudio (daed-next) Control Plane for dae eBPF Transparent Proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/daed-next -listen :2023 -data /etc/dae/daed-next -config /etc/dae/config.dae -dae-bin /usr/bin/dae
+Restart=on-failure
+RestartSec=3s
+LimitMEMLOCK=infinity
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+dist/
+.runtime/
+*.log
+.DS_Store
+__pycache__/
+*.pyc
+state.json
+config.dae
+*.sock
