@@ -2870,6 +2870,27 @@ function renderSysLogs(container) {
         </div>
       </div>
     </div>
+    <div class="split-2">
+      ${["geosite", "geoip"].map(kind => `
+        <div class="panel"><div class="panel-head">
+          <div><div class="panel-title">${kind === "geosite" ? "GeoSite 域名" : "GeoIP 地址"}数据库</div>
+          <div id="${kind}-status" class="section-sub" aria-live="polite">${kind}.dat · V2Fly 官方数据源</div></div>
+          <div class="toolbar"><button class="btn btn-sm" id="${kind}-check">检测更新</button>
+          <button class="btn btn-primary btn-sm hidden" id="${kind}-install">更新数据库</button></div>
+        </div></div>`).join("")}
+    </div>
+    <div class="panel" style="margin-bottom:20px;padding:20px;">
+      <div class="panel-title">数据库每周定时更新</div>
+      <div class="section-sub">北京时间（UTC+8）。网页关闭后仍执行；错过时间不超过 24 小时会补执行一次，超过则跳过。</div>
+      <div class="toolbar" style="margin-top:12px;flex-wrap:wrap;">
+        <label><input type="checkbox" id="geo-schedule-enabled"> 启用</label>
+        <select class="select" id="geo-schedule-day" aria-label="每周星期">${["日","一","二","三","四","五","六"].map((v,i)=>`<option value="${i}">星期${v}</option>`).join("")}</select>
+        <input type="time" class="input" id="geo-schedule-time" aria-label="执行时间" value="04:00" style="width:140px;">
+        <select class="select" id="geo-schedule-mode" aria-label="执行模式"><option value="check">仅检查更新</option><option value="update">检查并自动更新</option></select>
+        <button class="btn btn-primary" id="geo-schedule-save" disabled>保存定时设置</button>
+      </div>
+      <div class="section-sub" id="geo-schedule-status" aria-live="polite">正在读取定时设置…</div>
+    </div>
     <div class="conn-bar">
       ${checks
         .map((c) => {
@@ -2907,6 +2928,8 @@ function renderSysLogs(container) {
 
   bindPanelUpdate(container);
   bindCoreUpdate(container);
+  bindGeoUpdates(container);
+  bindGeoSchedule(container);
   renderLogsListDOM();
 
   container.querySelector("#lg-lvl")?.addEventListener("change", (e) => { store.logLevelFilter = e.target.value; renderLogsListDOM(); });
@@ -3003,3 +3026,83 @@ function splitCSV(str) {
 }
 
 initApp();
+
+function bindGeoUpdates(container) {
+  for (const kind of ["geosite", "geoip"]) {
+    const check = container.querySelector(`#${kind}-check`);
+    const install = container.querySelector(`#${kind}-install`);
+    const status = container.querySelector(`#${kind}-status`);
+    let release;
+    check.onclick = async () => {
+      check.disabled = true;
+      install.classList.add("hidden");
+      status.textContent = "正在检测官方数据库版本…";
+      try {
+        release = await apiFetch(`/api/v1/geodata/update?kind=${kind}`, { timeoutMs: 30000 });
+        if (release.error) throw new Error(release.error);
+        status.textContent = `${release.available ? "可更新" : "已是最新"} · ${release.latest} · 本地 SHA-256 ${release.currentHash ? release.currentHash.slice(0, 12) : "未安装"}`;
+        install.classList.toggle("hidden", !release.available);
+      } catch (err) { status.textContent = "检测失败：" + err.message; }
+      finally { check.disabled = false; }
+    };
+    install.onclick = async () => {
+      if (!release || store.applying) return;
+      if (store.dirty) { toast("请先保存当前编辑，再更新数据库", "error"); return; }
+      store.applying = true;
+      syncApplyControls();
+      check.disabled = install.disabled = true;
+      status.textContent = "正在下载、校验并应用数据库，请稍候…";
+      try {
+        const result = await apiFetch("/api/v1/geodata/update", {
+          method: "POST", timeoutMs: 260000,
+          body: JSON.stringify({ kind, digest: release.digest }),
+        });
+        if (!result.ok) throw new Error(result.error || "更新失败");
+        status.textContent = `${kind}.dat 已更新至 ${release.latest}，运行中的核心已热重载`;
+        install.classList.add("hidden");
+        toast("数据库更新完成", "success");
+      } catch (err) {
+        status.textContent = "更新失败：" + err.message;
+        if (err.unauthorized) openLoginModal();
+      } finally {
+        store.applying = false;
+        syncApplyControls();
+        check.disabled = install.disabled = false;
+      }
+    };
+  }
+}
+
+async function bindGeoSchedule(container) {
+ const get = id => container.querySelector(`#geo-schedule-${id}`);
+ const status=get("status"), save=get("save");
+ let schedule;
+ const date = value => value && !value.startsWith("0001-") ? new Date(value).toLocaleString("zh-CN", {timeZone:"Asia/Shanghai",hour12:false}) : "无";
+ function show(c) {
+  schedule=c;
+  get("enabled").checked=c.enabled;
+  get("day").value=String(c.weekday);
+  get("time").value=String(c.hour).padStart(2,"0")+":"+String(c.minute).padStart(2,"0");
+  get("mode").value=c.mode;
+  status.textContent=`${c.enabled ? "下次执行："+date(c.nextRun) : "定时更新已关闭"} · 最近执行：${date(c.lastRun)} · ${c.result || "尚未执行"}`;
+ }
+ try {
+  const c=await apiFetch("/api/v1/geodata/schedule");
+  if(c.error) throw new Error(c.error);
+  show(c);save.disabled=false;
+ } catch(err){status.textContent="读取失败："+err.message;}
+ save.onclick=async()=>{
+  if(!schedule)return;
+  const parts=get("time").value.split(":").map(Number);
+  if(parts.length!==2){toast("请选择执行时间","error");return;}
+  save.disabled=true;
+  try {
+   const c=await apiFetch("/api/v1/geodata/schedule",{method:"POST",body:JSON.stringify({
+    enabled:get("enabled").checked,weekday:Number(get("day").value),hour:parts[0],minute:parts[1],mode:get("mode").value,revision:schedule.revision
+   })});
+   if(c.error)throw new Error(c.error);
+   show(c);toast("定时设置已保存","success");
+  }catch(err){status.textContent="保存失败："+err.message;}
+  finally{save.disabled=false;}
+ };
+}

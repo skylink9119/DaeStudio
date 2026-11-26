@@ -84,6 +84,7 @@ func NewServer(statePath, daeBin string, mockMode bool, mgr *daemon.Manager, web
 		}
 		s.syncTrackedEndpoints()
 		go s.runSubscriptionScheduler()
+		go s.runGeoScheduler()
 	}
 	return s
 }
@@ -268,6 +269,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/stats", s.withAuth(s.handleStats))
 	mux.HandleFunc("GET /api/v1/doctor", s.withAuth(s.handleDoctor))
 	mux.HandleFunc("GET /api/v1/core/update", s.withAuth(s.handleCoreCheck))
+	mux.HandleFunc("GET /api/v1/geodata/update", s.withAuth(s.handleGeoCheck))
+	mux.HandleFunc("GET /api/v1/geodata/schedule", s.withAuth(s.handleGeoScheduleGet))
+	mux.HandleFunc("POST /api/v1/geodata/schedule", s.withAuth(s.withChange(s.handleGeoScheduleSave)))
+	mux.HandleFunc("POST /api/v1/geodata/update", s.withAuth(s.withChange(s.handleGeoInstall)))
 	mux.HandleFunc("POST /api/v1/core/update", s.withAuth(s.withChange(s.handleCoreInstall)))
 	mux.HandleFunc("GET /api/v1/panel/version", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"version": daemon.PanelVersion})
@@ -1819,4 +1824,35 @@ func defaultString(s, def string) string {
 		return def
 	}
 	return strings.TrimSpace(s)
+}
+
+func (s *Server) handleGeoCheck(w http.ResponseWriter, r *http.Request) {
+	release, err := s.mgr.CheckGeo(r.Context(), r.URL.Query().Get("kind"))
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, release)
+}
+func (s *Server) handleGeoInstall(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	enabled := s.state.Auth.Enabled
+	s.mu.RUnlock()
+	if !enabled {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "请先启用面板登录鉴权"})
+		return
+	}
+	var req struct {
+		Kind   string `json:"kind"`
+		Digest string `json:"digest"`
+	}
+	if err := decodeJSONBody(w, r, 1024, &req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "请求格式无效"})
+		return
+	}
+	if err := s.mgr.InstallGeo(r.Context(), req.Kind, req.Digest); err != nil {
+		writeJSON(w, 422, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
 }
