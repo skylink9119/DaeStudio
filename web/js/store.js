@@ -10,7 +10,7 @@ export const store = {
   theme: localStorage.getItem("daed_next_theme") || "dark",
 
   state: null,
-  panelVersion: "v1.0.8",
+  panelVersion: "v1.0.9",
   updateRepo: "",
   geoDataStatus: null,
   geoUpdating: false,

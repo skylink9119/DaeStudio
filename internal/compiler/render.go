@@ -3,6 +3,7 @@ package compiler
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -233,6 +234,13 @@ func runtimeState(st model.AppState) model.AppState {
 
 func ValidateOutbounds(st model.AppState) error {
 	nodes := EnabledNodes(st)
+	for _, node := range nodes {
+		u, err := url.Parse(strings.TrimSpace(node.URI))
+		if err == nil && u.Scheme == "vless" && u.Query().Get("security") == "reality" && strings.TrimSpace(u.Query().Get("pbk")) == "" {
+			return fmt.Errorf("Reality 节点缺少公钥 pbk，请重新导入完整节点链接")
+		}
+	}
+
 	builtinOutbounds := map[string]bool{
 		"direct":      true,
 		"must_direct": true,
@@ -340,9 +348,6 @@ func renderGroupFilter(group model.Group, nodes []model.Node, aliases []string) 
 	matchedIdxs := matchNodeIndicesForGroup(group, nodes)
 	if len(matchedIdxs) == 0 {
 		return []string{"filter: name(regex: '^$')"}
-	}
-	if len(matchedIdxs) == len(nodes) {
-		return nil
 	}
 	tags := make([]string, 0, len(matchedIdxs))
 	for _, idx := range matchedIdxs {
@@ -467,7 +472,7 @@ func RenderConfig(st model.AppState) string {
 	// 3. Node Block (all enabled manual + subscription nodes with unique tags)
 	b.WriteString("node {\n")
 	for i, n := range activeNodes {
-		fmt.Fprintf(&b, "    %s: '%s'\n", aliases[i], escapeSingleQuote(strings.TrimSpace(n.URI)))
+		fmt.Fprintf(&b, "    %s: '%s'\n", aliases[i], escapeSingleQuote(runtimeNodeURI(n.URI)))
 	}
 	b.WriteString("}\n\n")
 
@@ -733,4 +738,20 @@ func stripGeneratedNodeDNS(raw string) string {
 		out = append(out, lines[i])
 	}
 	return strings.Join(out, "\n")
+}
+
+// dae requires an explicit Reality fingerprint even when a client link omits it.
+func runtimeNodeURI(raw string) string {
+	raw = strings.TrimSpace(raw)
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "vless" {
+		return raw
+	}
+	q := u.Query()
+	if q.Get("security") != "reality" || strings.TrimSpace(q.Get("fp")) != "" {
+		return raw
+	}
+	q.Set("fp", "chrome")
+	u.RawQuery = q.Encode()
+	return u.String()
 }

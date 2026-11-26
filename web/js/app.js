@@ -58,7 +58,7 @@ async function loadBootstrap() {
   try {
     const data = await apiFetch("/api/v1/bootstrap");
     store.state = normalizeState(data.state);
-    store.panelVersion = data.panelVersion || store.panelVersion || "v1.0.8";
+    store.panelVersion = data.panelVersion || store.panelVersion || "v1.0.9";
     store.updateRepo = data.updateRepo ?? store.state?.updateRepo ?? "";
     store.geoDataStatus = data.geoDataStatus || store.geoDataStatus;
     store.configDae = data.configDae || "";
@@ -2829,20 +2829,63 @@ function openUpdateRepoModal(container) {
   });
 }
 
+function openPanelUpdateAuth(onReady) {
+  openModal({
+    title: "设置登录后继续升级",
+    bodyHTML: `
+      <p class="field-hint">在线升级需要管理员登录。保存后将自动重新检测更新。</p>
+      <div class="field"><label class="field-label" for="panel-auth-user">管理员账号</label>
+        <input id="panel-auth-user" class="input" autocomplete="username" value="${escapeHTML(store.state.auth?.username || "admin")}" /></div>
+      <div class="field"><label class="field-label" for="panel-auth-pass">登录密码</label>
+        <input id="panel-auth-pass" class="input" type="password" autocomplete="new-password" /></div>
+      <div class="field"><label class="field-label" for="panel-auth-confirm">确认密码</label>
+        <input id="panel-auth-confirm" class="input" type="password" autocomplete="new-password" /></div>
+      <p id="panel-auth-error" class="field-hint" role="alert"></p>`,
+    footerHTML: `<button class="btn" id="panel-auth-cancel">取消</button><button class="btn btn-primary" id="panel-auth-save">启用登录并继续</button>`,
+    onMount(box) {
+      box.querySelector("#panel-auth-cancel").addEventListener("click", closeModal);
+      box.querySelector("#panel-auth-save").addEventListener("click", async () => {
+        const btn = box.querySelector("#panel-auth-save");
+        const error = box.querySelector("#panel-auth-error");
+        const username = box.querySelector("#panel-auth-user").value.trim();
+        const password = box.querySelector("#panel-auth-pass").value;
+        if (!username || !password) { error.textContent = "请填写账号和密码"; return; }
+        if (password !== box.querySelector("#panel-auth-confirm").value) { error.textContent = "两次密码不一致"; return; }
+        btn.disabled = true;
+        try {
+          const res = await apiFetch("/api/v1/auth/update", { method: "POST", body: JSON.stringify({ enabled: true, username, password }) });
+          if (!res.ok) throw new Error(res.error || "设置登录失败");
+          store.token = res.token || store.token;
+          localStorage.setItem("daed_next_token", store.token);
+          store.state.auth = res.auth;
+          closeModal();
+          toast("登录保护已启用，请确认升级", "success");
+          onReady();
+        } catch (err) { error.textContent = err.message; }
+        finally { btn.disabled = false; }
+      });
+      box.querySelector("#panel-auth-pass").focus();
+    },
+  });
+}
+
 function bindPanelUpdate(container) {
   const checkBtn = container.querySelector("#panel-check");
   const installBtn = container.querySelector("#panel-install");
+  const authBtn = container.querySelector("#panel-auth-setup");
   const repoBtn = container.querySelector("#panel-repo-btn");
   const statusEl = container.querySelector("#panel-update-status");
   const releaseLink = container.querySelector("#panel-release-link");
   let latestVersion = "";
   let checkedRepo = "";
+  authBtn?.addEventListener("click", () => openPanelUpdateAuth(() => checkBtn.click()));
 
   repoBtn?.addEventListener("click", () => openUpdateRepoModal(container));
 
   checkBtn?.addEventListener("click", async () => {
     checkBtn.disabled = true;
     installBtn.classList.add("hidden");
+    authBtn?.classList.add("hidden");
     releaseLink.classList.add("hidden");
     try {
       statusEl.textContent = "正在查询 DaeStudio 最新版本…";
@@ -2862,9 +2905,10 @@ function bindPanelUpdate(container) {
         if (release.installable && store.state.auth?.enabled) {
           installBtn.classList.remove("hidden");
         } else if (release.installable) {
-          statusEl.textContent += " · 启用面板登录鉴权后可一键升级";
+          statusEl.textContent += " · 请先设置管理员登录，再继续升级";
+          authBtn?.classList.remove("hidden");
         } else {
-          statusEl.textContent += " · 当前环境请下载安装包手动升级";
+          statusEl.textContent += " · " + (release.installReason || "当前环境请下载安装包手动升级");
         }
       } else {
         statusEl.textContent = `当前 ${release.current} · 已是最新正式版`;
@@ -3169,13 +3213,14 @@ function renderSysLogs(container) {
           <div>
             <div style="display:flex;align-items:center;gap:8px;">
               <span class="panel-title">DaeStudio 面板更新</span>
-              <span class="tag tag-primary mono">${escapeHTML(store.panelVersion || "v1.0.8")}</span>
+              <span class="tag tag-primary mono">${escapeHTML(store.panelVersion || "v1.0.9")}</span>
             </div>
-            <div id="panel-update-status" class="section-sub" aria-live="polite">当前版本 ${escapeHTML(store.panelVersion || "v1.0.8")} · 支持在线检测与 SHA-256 校验升级</div>
+            <div id="panel-update-status" class="section-sub" aria-live="polite">当前版本 ${escapeHTML(store.panelVersion || "v1.0.9")} · 支持在线检测与 SHA-256 校验升级</div>
           </div>
           <div class="toolbar">
             <a id="panel-release-link" class="btn btn-sm hidden" target="_blank" rel="noopener noreferrer">发行说明</a>
             <button class="btn btn-sm" id="panel-check">检测更新</button>
+            <button class="btn btn-primary btn-sm hidden" id="panel-auth-setup">设置登录并继续</button>
             <button class="btn btn-primary btn-sm hidden" id="panel-install">一键升级</button>
           </div>
         </div>
