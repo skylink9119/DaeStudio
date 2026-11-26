@@ -131,3 +131,9 @@ ARM64、x86_64、x86_32 的 .run、.tar.gz、.ipk 和 .deb 安装包均内置官
 正式面板不提供模拟模式参数，也不会在内核缺失时生成模拟运行状态或流量。单独下载面板二进制时，需要另外安装 dae；全新安装应使用完整安装包。
 
 DaeStudio 使用 MIT 协议。内置 dae 的协议见 DAE-LICENSE，安装包同时携带 dae-source.tar.gz、CORE-NOTICE.txt 和官方发行文件的 SHA-256 清单 dae-core.json，安装到 /usr/share/doc/daed-next。构建脚本根据 scripts/dae-core.json 校验官方内核文件。
+
+### v1.0.5 默认 DNS 缓存与白名单
+
+首次安装与恢复默认设置使用 DNS DSL 模板，默认监听 127.0.0.1:15353，启用 optimistic_cache，过期缓存后台刷新窗口为 60 秒，最多缓存 8192 条记录。国内使用阿里 DoH，海外使用经代理访问的 Cloudflare DoH。Apple 国内服务的 DNS 白名单与直连规则一致，淘宝和喜马拉雅按通用国内规则匹配，广告拦截默认关闭。
+
+导入以域名作为服务器地址的节点时，DSL 渲染也会自动添加节点入口域名的国内 DNS 解析规则。无节点时使用带缓存的国内 DNS 与直连配置。已有配置在升级后保留；恢复默认设置会清空节点和订阅，请先备份后操作。

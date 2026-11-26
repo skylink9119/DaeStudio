@@ -228,6 +228,8 @@ func runtimeState(st model.AppState) model.AppState {
 		Upstreams:       []model.DNSUpstream{{Tag: "cndns", URL: "https://223.5.5.5/dns-query"}},
 		RequestFallback: "cndns", ResponseFallback: "accept",
 	}
+	st.DNS.Mode = "dsl"
+	st.DNS.RawDSL = fmt.Sprintf("bind: '%s'\noptimistic_cache: true\noptimistic_cache_ttl: 60\nmax_cache_size: 8192\nupstream {\n cndns: 'https://223.5.5.5/dns-query'\n}\nrouting {\n request {\n fallback: cndns\n }\n}", escapeSingleQuote(st.DNS.Bind))
 	return st
 }
 
@@ -470,7 +472,20 @@ func RenderConfig(st model.AppState) string {
 	// 4. DNS Block
 	b.WriteString("dns {\n")
 	if st.DNS.Mode == "dsl" && strings.TrimSpace(st.DNS.RawDSL) != "" {
-		for _, line := range strings.Split(strings.TrimSpace(unwrapBlockBody(st.DNS.RawDSL, "dns")), "\n") {
+		rawDNS := strings.TrimSpace(unwrapBlockBody(st.DNS.RawDSL, "dns"))
+		directDNSTag := pickDirectDNSTag(ParseDNSDSL(rawDNS))
+		if len(nodeDomains) > 0 && directDNSTag != "" {
+			fullList := make([]string, len(nodeDomains))
+			for i, domain := range nodeDomains {
+				fullList[i] = "full:" + domain
+			}
+			requestBlock := regexp.MustCompile(`(?m)^\s*request\s*\{`)
+			if loc := requestBlock.FindStringIndex(rawDNS); loc != nil {
+				rule := fmt.Sprintf("\n        qname(%s) -> %s", strings.Join(fullList, ", "), directDNSTag)
+				rawDNS = rawDNS[:loc[1]] + rule + rawDNS[loc[1]:]
+			}
+		}
+		for _, line := range strings.Split(rawDNS, "\n") {
 			b.WriteString("    " + line + "\n")
 		}
 	} else {

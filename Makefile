@@ -1,6 +1,6 @@
 APP_NAME := daed-next
 BUILD_DIR := dist
-VERSION ?= v1.0.4
+VERSION ?= v1.0.5
 DEFAULT_REPO ?= skylink9119/DaeStudio
 LDFLAGS := -s -w -X daed-next/internal/daemon.PanelVersion=$(VERSION) -X daed-next/internal/daemon.DefaultUpdateRepo=$(DEFAULT_REPO)
 

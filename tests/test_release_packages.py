@@ -32,6 +32,12 @@ def deb_data(path):
 
 class ReleasePackages(unittest.TestCase):
     def check_payload(self, files, core, machine, prefix):
+        profile = (DIST.parent / "internal/model/default_profile.json").read_bytes()
+        panels = [data for name, data in files.items()
+                  if name in ("usr/bin/daed-next", "usr/local/bin/daed-next") or "/daed-next-linux-" in name]
+        self.assertTrue(panels, "missing panel binary")
+        for panel in panels:
+            self.assertTrue(profile in panel, "installer embeds an outdated default profile")
         self.assertEqual(files[core][:4], b"\x7fELF")
         self.assertEqual(struct.unpack("<H", files[core][18:20])[0], machine)
         for name in ("geoip.dat", "geosite.dat"):

@@ -23,7 +23,7 @@
     "disableWaitingNetwork": false
   },
   "dns": {
-    "mode": "visual",
+    "mode": "dsl",
     "bind": "127.0.0.1:15353",
     "ipVersionPrefer": 4,
     "upstreams": [
@@ -38,18 +38,11 @@
     ],
     "requestRules": [
       {
-        "id": "default-dns-1",
+        "id": "default-dns-apple",
         "enabled": true,
-        "expr": "qname(full:amdc.m.taobao.com, full:amdcopen.m.taobao.com, full:tce.alicdn.com)",
+        "expr": "qname(geosite:apple@cn, suffix:apple.com.cn)",
         "target": "cndns",
-        "comment": "淘宝误杀豁免"
-      },
-      {
-        "id": "default-dns-2",
-        "enabled": true,
-        "expr": "qname(geosite:ximalaya, suffix:ximalaya.com, suffix:xmcdn.com)",
-        "target": "cndns",
-        "comment": "保留喜马拉雅兼容性白名单"
+        "comment": "Apple 国内服务"
       },
       {
         "id": "default-dns-3",
@@ -83,7 +76,7 @@
     "requestFallback": "fallbackdns",
     "responseRules": null,
     "responseFallback": "accept",
-    "rawDsl": ""
+    "rawDsl": "bind: '127.0.0.1:15353'\nipversion_prefer: 4\noptimistic_cache: true\noptimistic_cache_ttl: 60\nmax_cache_size: 8192\nupstream {\n    cndns: 'https://223.5.5.5:443/dns-query'\n    fallbackdns: 'https://1.1.1.1/dns-query'\n}\nrouting {\n    request {\n        qname(geosite:apple@cn, suffix:apple.com.cn) -> cndns\n        # [Disabled] qname(geosite:category-ads-all) -> reject\n        qname(suffix:googleapis.cn, suffix:xn--ngstr-lra8j.com) -> fallbackdns\n        qname(suffix:youtube.com, suffix:youtu.be, suffix:googlevideo.com, suffix:ytimg.com, suffix:youtubei.googleapis.com, suffix:youtube.googleapis.com) -> fallbackdns\n        qname(geosite:cn) -> cndns\n        fallback: fallbackdns\n    }\n}"
   },
   "routing": {
     "mode": "visual",
@@ -178,29 +171,15 @@
         "outbound": "proxy"
       },
       {
-        "id": "default-route-7",
+        "id": "default-route-apple",
         "enabled": true,
-        "name": "淘宝误杀豁免",
+        "name": "Apple 国内服务直连",
         "category": "direct",
         "conditions": [
           {
             "negate": false,
             "field": "domain",
-            "value": "full:amdc.m.taobao.com, full:amdcopen.m.taobao.com, full:tce.alicdn.com"
-          }
-        ],
-        "outbound": "direct"
-      },
-      {
-        "id": "default-route-8",
-        "enabled": true,
-        "name": "与 DNS 中的喜马拉雅白名单保持一致",
-        "category": "direct",
-        "conditions": [
-          {
-            "negate": false,
-            "field": "domain",
-            "value": "geosite:ximalaya, suffix:ximalaya.com, suffix:xmcdn.com"
+            "value": "geosite:apple@cn, suffix:apple.com.cn"
           }
         ],
         "outbound": "direct"
