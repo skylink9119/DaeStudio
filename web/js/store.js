@@ -158,18 +158,18 @@ export function regionLabel(region) {
 
 export function latencyTagHTML(ms) {
   if (ms === -1 || ms === undefined || ms === null) {
-    return `<span class="tag mono">—</span>`;
+    return `<span title="仅测节点入口 TCP 建连，不代表代理实际延迟；TCP 可连接不代表代理可用" class="tag mono">—</span>`;
   }
   if (ms === 0) {
-    return `<span class="tag tag-err mono">超时</span>`;
+    return `<span title="仅测节点入口 TCP 建连，不代表代理实际延迟；TCP 可连接不代表代理可用" class="tag tag-err mono">超时</span>`;
   }
   if (ms < 120) {
-    return `<span class="tag tag-ok mono">${ms} ms</span>`;
+    return `<span title="仅测节点入口 TCP 建连，不代表代理实际延迟；TCP 可连接不代表代理可用" class="tag tag-ok mono">${ms} ms</span>`;
   }
   if (ms < 260) {
-    return `<span class="tag tag-warn mono">${ms} ms</span>`;
+    return `<span title="仅测节点入口 TCP 建连，不代表代理实际延迟；TCP 可连接不代表代理可用" class="tag tag-warn mono">${ms} ms</span>`;
   }
-  return `<span class="tag tag-err mono">${ms} ms</span>`;
+  return `<span title="仅测节点入口 TCP 建连，不代表代理实际延迟；TCP 可连接不代表代理可用" class="tag tag-err mono">${ms} ms</span>`;
 }
 
 export function escapeHTML(str) {

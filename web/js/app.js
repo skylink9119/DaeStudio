@@ -515,7 +515,7 @@ function renderOverview(root) {
       </div>
       <div class="toolbar">
         <button class="btn btn-sm" id="ov-btn-conn">检测连通性</button>
-        <button class="btn btn-sm" id="ov-btn-probe" ${store.probing ? "disabled" : ""}>${store.probing ? "测速中..." : "全节点测速"}</button>
+        <button class="btn btn-sm" id="ov-btn-probe" ${store.probing ? "disabled" : ""}>${store.probing ? "检测中..." : "测试节点 TCP"}</button>
         <button class="btn btn-sm" id="ov-btn-reload">热重载</button>
         ${
           s.running
@@ -837,7 +837,7 @@ function renderProxiesAndSubs(root) {
         <button class="btn btn-sm" id="px-btn-add-sub">添加订阅源</button>
         <button class="btn btn-sm" id="px-btn-add-node">添加 / 批量导入节点</button>
         <button class="btn btn-sm btn-primary" id="px-btn-probe-all" ${store.probing ? "disabled" : ""}>
-          ${store.probing ? "正在测速..." : "测试全部延迟"}
+          ${store.probing ? "检测中..." : "测试全部 TCP 建连"}
         </button>
       </div>
     </div>
@@ -924,7 +924,7 @@ function renderProxiesAndSubs(root) {
           </select>
         </div>
         <select id="nd-sort" class="select select-sm" style="width:140px;">
-          <option value="latency" ${nf.sortBy === "latency" ? "selected" : ""}>按延迟升序</option>
+          <option value="latency" ${nf.sortBy === "latency" ? "selected" : ""}>按 TCP 建连耗时升序</option>
           <option value="name" ${nf.sortBy === "name" ? "selected" : ""}>按名称排序</option>
         </select>
       </div>
@@ -941,7 +941,7 @@ function renderProxiesAndSubs(root) {
                     <th>来源</th>
                     <th>协议</th>
                     <th>服务器地址</th>
-                    <th>延迟</th>
+                    <th title="路由器连接节点服务器端口的耗时，包含地址解析；不包含代理握手或网站请求">TCP 建连</th>
                     <th style="text-align:right;">操作</th>
                   </tr>
                 </thead>
@@ -3196,7 +3196,6 @@ function bindGeoDataPanel(container) {
 
 function renderSysLogs(container) {
   const checks = store.doctor?.checks || [];
-  const activeRepo = store.updateRepo || "未指定";
   const geoSt = store.geoDataStatus || {};
   const geoCfg = geoSt.config || store.state?.geoData || { preset: "loyalsoldier", autoUpdate: false, scheduleMode: "daily", scheduleTime: "04:00" };
   const geoIP = geoSt.geoip || {};
@@ -3224,10 +3223,7 @@ function renderSysLogs(container) {
             <button class="btn btn-primary btn-sm hidden" id="panel-install">一键升级</button>
           </div>
         </div>
-        <div class="panel-foot">
-          <span>更新仓库：<span class="mono">${escapeHTML(activeRepo)}</span></span>
-          <button type="button" class="btn btn-subtle btn-sm" id="panel-repo-btn" style="height:26px;min-height:26px;padding:0 8px;font-size:12px;">更新源</button>
-        </div>
+
       </div>
 
       <div class="panel" style="display:flex;flex-direction:column;justify-content:space-between;">
@@ -3242,9 +3238,7 @@ function renderSysLogs(container) {
             <button class="btn btn-primary btn-sm hidden" id="core-install">下载并安装</button>
           </div>
         </div>
-        <div class="panel-foot">
-          <span>自动同步官方 <span class="mono">daeuniverse/dae</span> 稳定版内核并校验配置兼容性</span>
-        </div>
+
       </div>
     </div>
 
