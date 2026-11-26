@@ -282,9 +282,18 @@ func (m *Manager) startCurrentConfig() error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	cmd := exec.Command(m.daeBin, "run", "-c", m.configPath)
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
+	// Keep core logging independent of the panel's lifetime. Pipes lose their
+	// reader when the panel restarts, which can break the core during reload.
+	logDir := "/var/log/dae"
+	if runtime.GOOS != "linux" {
+		logDir = filepath.Dir(m.configPath)
+	}
+	if err := os.MkdirAll(logDir, 0o700); err != nil {
+		return err
+	}
+	cmd := exec.Command(m.daeBin, "run", "-c", m.configPath,
+		"--logfile", filepath.Join(logDir, "dae.log"),
+		"--logfile-maxsize", "2", "--logfile-maxbackups", "1")
 	if err := cmd.Start(); err != nil {
 		m.appendLogUnlocked("error", "启动 dae 失败: "+err.Error())
 		return err
@@ -297,8 +306,6 @@ func (m *Manager) startCurrentConfig() error {
 	m.lastReloadedAt = time.Now().Format(time.RFC3339)
 	m.appendLogUnlocked("info", fmt.Sprintf("dae 核心进程已启动 (PID=%d)", m.pid))
 
-	go m.streamLogs(stdout)
-	go m.streamLogs(stderr)
 	go func() {
 		err := cmd.Wait()
 		m.mu.Lock()

@@ -472,7 +472,7 @@ func RenderConfig(st model.AppState) string {
 	// 4. DNS Block
 	b.WriteString("dns {\n")
 	if st.DNS.Mode == "dsl" && strings.TrimSpace(st.DNS.RawDSL) != "" {
-		rawDNS := strings.TrimSpace(unwrapBlockBody(st.DNS.RawDSL, "dns"))
+		rawDNS := stripGeneratedNodeDNS(strings.TrimSpace(unwrapBlockBody(st.DNS.RawDSL, "dns")))
 		directDNSTag := pickDirectDNSTag(ParseDNSDSL(rawDNS))
 		if len(nodeDomains) > 0 && directDNSTag != "" {
 			fullList := make([]string, len(nodeDomains))
@@ -481,7 +481,7 @@ func RenderConfig(st model.AppState) string {
 			}
 			requestBlock := regexp.MustCompile(`(?m)^\s*request\s*\{`)
 			if loc := requestBlock.FindStringIndex(rawDNS); loc != nil {
-				rule := fmt.Sprintf("\n        qname(%s) -> %s", strings.Join(fullList, ", "), directDNSTag)
+				rule := fmt.Sprintf("\n        # [Auto:NodeDomains] 代理节点入口域名走直连 DNS 解析（防死锁）\n        qname(%s) -> %s", strings.Join(fullList, ", "), directDNSTag)
 				rawDNS = rawDNS[:loc[1]] + rule + rawDNS[loc[1]:]
 			}
 		}
@@ -709,4 +709,26 @@ func sanitizeIdentifier(s string) string {
 		}
 	}
 	return out.String()
+}
+
+// stripGeneratedNodeDNS removes only explicitly marked generated DNS rules.
+// User-authored hostname rules must remain untouched.
+func stripGeneratedNodeDNS(raw string) string {
+	lines := strings.Split(raw, "\n")
+	out := make([]string, 0, len(lines))
+	for i := 0; i < len(lines); i++ {
+		t := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(t, "#") && isAutoNodeDomainComment(strings.TrimPrefix(t, "#")) {
+			j := i + 1
+			for j < len(lines) && strings.TrimSpace(lines[j]) == "" {
+				j++
+			}
+			if j < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[j]), "qname(") && strings.Contains(lines[j], "->") {
+				i = j
+				continue
+			}
+		}
+		out = append(out, lines[i])
+	}
+	return strings.Join(out, "\n")
 }

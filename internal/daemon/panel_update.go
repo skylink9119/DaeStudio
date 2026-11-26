@@ -25,7 +25,7 @@ import (
 
 // PanelVersion and DefaultUpdateRepo can be overridden at link time via -ldflags "-X ...".
 var (
-	PanelVersion      = "v1.0.2"
+	PanelVersion      = "v1.0.6"
 	DefaultUpdateRepo = ""
 )
 

@@ -1961,6 +1961,27 @@ function renderSystem(root) {
   else renderSysLogs(body);
 }
 
+function renderDnsRuleExpression(rule) {
+  const expression = String(rule.expr || "");
+  if (expression.length <= 180) return escapeHTML(expression);
+
+  const match = expression.match(/^qname\((.*)\)$/s);
+  const parts = match ? match[1].split(",").map((part) => part.trim()) : [];
+  const nodeDomains = new Set((store.state.nodes || [])
+    .filter((node) => node.enabled !== false)
+    .map((node) => String(node.address || "").toLowerCase()));
+  const isNodeRule = parts.length > 0 && parts.every((part) =>
+    part.startsWith("full:") && nodeDomains.has(part.slice(5).trim().toLowerCase()));
+  const label = isNodeRule
+    ? `节点入口 DNS · 共 ${parts.length} 个域名`
+    : "长匹配条件 · 展开查看";
+
+  return `<details>
+    <summary style="cursor:pointer;font-family:inherit;">${label}</summary>
+    <div style="margin-top:10px;max-height:240px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHTML(expression)}</div>
+  </details>`;
+}
+
 function renderSysNetDNS(container) {
   const g = store.state.global;
   const dns = store.state.dns;
@@ -2139,7 +2160,7 @@ function renderSysNetDNS(container) {
                               <span class="toggle-slider"></span>
                             </label>
                           </td>
-                          <td class="mono" style="font-size: 15px;">${escapeHTML(r.expr)}</td>
+                          <td class="mono" style="font-size: 15px;">${renderDnsRuleExpression(r)}</td>
                           <td class="mono">${escapeHTML(r.target)}</td>
                         </tr>`
                       )
@@ -2167,7 +2188,7 @@ function renderSysNetDNS(container) {
                                      <span class="toggle-slider"></span>
                                    </label>
                                  </td>
-                                 <td class="mono" style="font-size: 15px;">${escapeHTML(r.expr)}</td>
+                                 <td class="mono" style="font-size: 15px;">${renderDnsRuleExpression(r)}</td>
                                  <td class="mono">${escapeHTML(r.target)}</td>
                                </tr>`
                              )
