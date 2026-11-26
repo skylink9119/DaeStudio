@@ -438,15 +438,34 @@ func ParseConfigDAE(cfg string, base model.AppState) (model.AppState, error) {
 		}
 	}
 
+	isDirectPlaceholder := strings.Contains(cfg, "[DirectWithoutNodes]") && base.DirectWithoutNodes && len(st.Nodes) == 0
+
 	if dnsBody, ok := blocks["dns"]; ok {
-		parseDNSBlock(dnsBody, &st.DNS)
+		if isDirectPlaceholder {
+			var candDNS model.DNSConfig
+			parseDNSBlock(dnsBody, &candDNS)
+			isUntouchedPlaceholderDNS := len(candDNS.Upstreams) == 1 &&
+				candDNS.Upstreams[0].Tag == "cndns" &&
+				len(candDNS.RequestRules) == 0 &&
+				len(candDNS.ResponseRules) == 0 &&
+				candDNS.RequestFallback == "cndns"
+			if isUntouchedPlaceholderDNS {
+				st.DNS.Bind = candDNS.Bind
+			} else {
+				st.DNS = candDNS
+			}
+		} else {
+			parseDNSBlock(dnsBody, &st.DNS)
+		}
 	}
 	if rtBody, ok := blocks["routing"]; ok {
 		rules, fb := ParseRoutingDSL(rtBody)
-		st.Routing.Mode = "visual"
-		st.Routing.Rules = rules
-		st.Routing.Fallback = fb
-		st.Routing.RawDSL = strings.TrimSpace(rtBody)
+		if !(isDirectPlaceholder && len(rules) == 0 && fb == "direct") {
+			st.Routing.Mode = "visual"
+			st.Routing.Rules = rules
+			st.Routing.Fallback = fb
+			st.Routing.RawDSL = strings.TrimSpace(rtBody)
+		}
 	}
 
 	return st, nil

@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"daed-next/internal/daemon"
@@ -35,15 +34,13 @@ func resetDefaults(previous model.AppState) model.AppState {
 	next := model.ProductionDefaults()
 	next.Auth = previous.Auth
 	next.UpdateRepo = previous.UpdateRepo
+	next.GeoData = previous.GeoData
 	next.Global.WanInterface = previous.Global.WanInterface
 	next.Global.LanInterfaces = append([]string(nil), previous.Global.LanInterfaces...)
 	next.Subscriptions = []model.Subscription{}
 	next.Nodes = []model.Node{}
 	next.Snapshots = previous.Clone().Snapshots
-	if previous.DNS.Bind != "" {
-		next.DNS.RawDSL = strings.Replace(next.DNS.RawDSL, "bind: '"+next.DNS.Bind+"'", "bind: '"+previous.DNS.Bind+"'", 1)
-		next.DNS.Bind = previous.DNS.Bind
-	}
+	next.DNS.Bind = previous.DNS.Bind
 	return next
 }
 

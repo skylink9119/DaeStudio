@@ -16,7 +16,7 @@ import time
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST_DIR = os.path.join(ROOT_DIR, "dist")
-VERSION = os.environ.get("DAED_NEXT_VERSION", "1.0.7")
+VERSION = os.environ.get("DAED_NEXT_VERSION", "1.0.8")
 MTIME = int(time.time())
 
 

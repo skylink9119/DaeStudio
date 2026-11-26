@@ -1291,18 +1291,50 @@ class DaeStudioHandler(SimpleHTTPRequestHandler):
             with self.ctx.lock:
                 st = json.loads(json.dumps(self.ctx.state))
                 logs = list(self.ctx.logs)
+            geo_cfg = st.get("geoData") or {
+                "preset": "loyalsoldier",
+                "autoUpdate": False,
+                "scheduleMode": "daily",
+                "scheduleTime": "04:00",
+                "scheduleWeekday": 1,
+                "intervalDays": 3,
+            }
+            ts_iso = now_iso()
+            geo_status = {
+                "dir": "/usr/share/dae (Mock)",
+                "updating": False,
+                "geoip": {"name": "geoip.dat", "path": "/usr/share/dae/geoip.dat", "exists": True, "sizeBytes": 23876117, "modified": ts_iso, "hasBackup": True},
+                "geosite": {"name": "geosite.dat", "path": "/usr/share/dae/geosite.dat", "exists": True, "sizeBytes": 2415689, "modified": ts_iso, "hasBackup": True},
+                "config": geo_cfg,
+                "nextRunAt": "",
+            }
             self._send_json(
                 200,
                 {
                     "state": st,
-                    "panelVersion": "v1.0.0",
+                    "panelVersion": "v1.0.3",
                     "updateRepo": st.get("updateRepo") or os.environ.get("DAED_NEXT_REPO", ""),
+                    "geoDataStatus": geo_status,
                     "configDae": render_config_dae(st),
                     "stats": self.ctx.stats(),
                     "doctor": self.ctx.doctor(),
                     "logs": logs,
                 },
             )
+            return
+        if path == "/api/v1/geodata":
+            if not self._check_auth():
+                return
+            with self.ctx.lock:
+                geo_cfg = dict(self.ctx.state.get("geoData") or {"preset": "loyalsoldier", "autoUpdate": False, "scheduleMode": "daily", "scheduleTime": "04:00", "scheduleWeekday": 1, "intervalDays": 3})
+            ts_iso = now_iso()
+            self._send_json(200, {
+                "dir": "/usr/share/dae (Mock)",
+                "updating": False,
+                "geoip": {"name": "geoip.dat", "path": "/usr/share/dae/geoip.dat", "exists": True, "sizeBytes": 23876117, "modified": ts_iso, "hasBackup": True},
+                "geosite": {"name": "geosite.dat", "path": "/usr/share/dae/geosite.dat", "exists": True, "sizeBytes": 2415689, "modified": ts_iso, "hasBackup": True},
+                "config": geo_cfg,
+            })
             return
         if path == "/api/v1/panel/update":
             if not self._check_auth():
@@ -1313,9 +1345,9 @@ class DaeStudioHandler(SimpleHTTPRequestHandler):
             if q.get("repo"):
                 repo = q["repo"][0].strip()
             if not repo:
-                self._send_json(400, {"error": "请先填写面板 GitHub 仓库地址（格式：owner/repo）", "current": "v1.0.0", "needRepoConfig": True})
+                self._send_json(400, {"error": "请先填写面板 GitHub 仓库地址（格式：owner/repo）", "current": "v1.0.3", "needRepoConfig": True})
                 return
-            self._send_json(200, {"current": "v1.0.0", "latest": "v1.0.0", "repo": repo, "url": f"https://github.com/{repo}/releases", "available": False, "installable": False})
+            self._send_json(200, {"current": "v1.0.3", "latest": "v1.0.3", "repo": repo, "url": f"https://github.com/{repo}/releases", "available": False, "installable": False})
             return
         if path == "/api/v1/stats":
             if not self._check_auth():
@@ -1364,6 +1396,60 @@ class DaeStudioHandler(SimpleHTTPRequestHandler):
                 self.ctx.sessions[tok] = time.time()
                 resp_auth = dict(auth)
             self._send_json(200, {"ok": True, "token": tok, "auth": resp_auth})
+            return
+
+        if path == "/api/v1/geodata/config":
+            with self.ctx.lock:
+                prev = dict(self.ctx.state.get("geoData") or {})
+                prev.update({
+                    "preset": req.get("preset") or "loyalsoldier",
+                    "geoipUrl": req.get("geoipUrl") or "",
+                    "geositeUrl": req.get("geositeUrl") or "",
+                    "geoipSumUrl": req.get("geoipSumUrl") or "",
+                    "geositeSumUrl": req.get("geositeSumUrl") or "",
+                    "autoUpdate": bool(req.get("autoUpdate")),
+                    "scheduleMode": req.get("scheduleMode") or "daily",
+                    "scheduleTime": req.get("scheduleTime") or "04:00",
+                    "scheduleWeekday": int(req.get("scheduleWeekday") or 0),
+                    "intervalDays": int(req.get("intervalDays") or 3),
+                })
+                self.ctx.state["geoData"] = prev
+                self.ctx._save_unlocked(self.ctx.state)
+            ts_iso = now_iso()
+            self._send_json(200, {
+                "ok": True,
+                "geoData": prev,
+                "geoDataStatus": {
+                    "dir": "/usr/share/dae (Mock)",
+                    "updating": False,
+                    "geoip": {"name": "geoip.dat", "path": "/usr/share/dae/geoip.dat", "exists": True, "sizeBytes": 23876117, "modified": ts_iso, "hasBackup": True},
+                    "geosite": {"name": "geosite.dat", "path": "/usr/share/dae/geosite.dat", "exists": True, "sizeBytes": 2415689, "modified": ts_iso, "hasBackup": True},
+                    "config": prev,
+                },
+            })
+            return
+
+        if path == "/api/v1/geodata/update":
+            ts_iso = now_iso()
+            with self.ctx.lock:
+                prev = dict(self.ctx.state.get("geoData") or {"preset": "loyalsoldier", "scheduleMode": "daily", "scheduleTime": "04:00"})
+                prev["lastUpdatedAt"] = ts_iso
+                prev["lastStatus"] = "ok"
+                prev["lastMessage"] = "已完成分流数据库更新 (预览模式)"
+                self.ctx.state["geoData"] = prev
+                self.ctx._save_unlocked(self.ctx.state)
+                self.ctx.log("info", prev["lastMessage"])
+            self._send_json(200, {
+                "ok": True,
+                "message": prev["lastMessage"],
+                "geoDataStatus": {
+                    "dir": "/usr/share/dae (Mock)",
+                    "updating": False,
+                    "geoip": {"name": "geoip.dat", "path": "/usr/share/dae/geoip.dat", "exists": True, "sizeBytes": 23876117, "modified": ts_iso, "hasBackup": True},
+                    "geosite": {"name": "geosite.dat", "path": "/usr/share/dae/geosite.dat", "exists": True, "sizeBytes": 2415689, "modified": ts_iso, "hasBackup": True},
+                    "config": prev,
+                },
+            })
             return
 
         if path == "/api/v1/state":

@@ -10,8 +10,10 @@ export const store = {
   theme: localStorage.getItem("daed_next_theme") || "dark",
 
   state: null,
-  panelVersion: "v1.0.2",
+  panelVersion: "v1.0.8",
   updateRepo: "",
+  geoDataStatus: null,
+  geoUpdating: false,
   configDae: "",
   stats: {
     running: false,
@@ -42,6 +44,9 @@ export const store = {
 
 const IF_MATCH_ENDPOINTS = new Set([
   "/api/v1/state",
+  "/api/v1/auth/update",
+  "/api/v1/panel/repo",
+  "/api/v1/geodata/config",
   "/api/v1/config/import",
   "/api/v1/snapshots",
   "/api/v1/snapshots/delete",
@@ -104,11 +109,13 @@ export function toast(message, type = "info") {
   const el = document.createElement("div");
   el.className = `toast-msg ${type}`;
   el.textContent = message;
+  el.addEventListener("click", () => el.remove());
   stack.appendChild(el);
   setTimeout(() => {
     el.style.opacity = "0";
-    setTimeout(() => el.remove(), 200);
-  }, type === "error" ? 10000 : 3200);
+    el.style.transform = "translateY(6px)";
+    setTimeout(() => el.remove(), 220);
+  }, type === "error" ? 9000 : 3400);
 }
 
 export function formatBytes(bytes) {

@@ -1,6 +1,6 @@
 APP_NAME := daed-next
 BUILD_DIR := dist
-VERSION ?= v1.0.7
+VERSION ?= v1.0.8
 DEFAULT_REPO ?= skylink9119/DaeStudio
 LDFLAGS := -s -w -X daed-next/internal/daemon.PanelVersion=$(VERSION) -X daed-next/internal/daemon.DefaultUpdateRepo=$(DEFAULT_REPO)
 
@@ -26,7 +26,7 @@ build-all:
 ## Start instant local preview server (works with Go or zero-dependency Python 3)
 preview:
 	@if command -v go >/dev/null 2>&1; then \
-		go run ./cmd/daed-next -listen 127.0.0.1:2023 -data ./.runtime -config ./.runtime/config.dae; \
+		go run ./cmd/daed-next -listen 127.0.0.1:2023 -data ./.runtime -config ./.runtime/config.dae -mock; \
 	else \
 		python3 ./scripts/preview_server.py --host 127.0.0.1 --port 2023; \
 	fi

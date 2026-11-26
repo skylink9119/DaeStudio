@@ -9,6 +9,7 @@ type AppState struct {
 	Revision           string         `json:"revision"`
 	UpdatedAt          string         `json:"updatedAt"`
 	UpdateRepo         string         `json:"updateRepo,omitempty"`
+	GeoData            GeoDataConfig  `json:"geoData,omitempty"`
 	Auth               AuthConfig     `json:"auth"`
 	Global             GlobalConfig   `json:"global"`
 	Subscriptions      []Subscription `json:"subscriptions"`
@@ -17,6 +18,34 @@ type AppState struct {
 	DNS                DNSConfig      `json:"dns"`
 	Routing            RoutingConfig  `json:"routing"`
 	Snapshots          []Snapshot     `json:"snapshots"`
+}
+
+type GeoDataConfig struct {
+	Preset          string `json:"preset"`                    // loyalsoldier, metacubex, v2fly, custom
+	GeoIPURL        string `json:"geoipUrl,omitempty"`        // custom HTTPS URL when preset == "custom"
+	GeoSiteURL      string `json:"geositeUrl,omitempty"`      // custom HTTPS URL when preset == "custom"
+	GeoIPSumURL     string `json:"geoipSumUrl,omitempty"`     // optional SHA-256 URL when preset == "custom"
+	GeoSiteSumURL   string `json:"geositeSumUrl,omitempty"`   // optional SHA-256 URL when preset == "custom"
+	AutoUpdate      bool   `json:"autoUpdate"`                // enable background scheduled update
+	ScheduleMode    string `json:"scheduleMode"`              // daily, weekly, interval
+	ScheduleTime    string `json:"scheduleTime"`              // HH:MM in local router time (e.g. "04:00")
+	ScheduleWeekday int    `json:"scheduleWeekday"`           // 0=Sun .. 6=Sat (when ScheduleMode == "weekly")
+	IntervalDays    int    `json:"intervalDays"`              // 1..30 days (when ScheduleMode == "interval")
+	LastUpdatedAt   string `json:"lastUpdatedAt,omitempty"`   // RFC3339 timestamp of last successful check/update
+	LastStatus      string `json:"lastStatus,omitempty"`      // ok, error
+	LastMessage     string `json:"lastMessage,omitempty"`     // human-readable summary of last run
+}
+
+// DefaultGeoDataConfig returns default GeoIP/GeoSite update settings using Loyalsoldier enhanced rules.
+func DefaultGeoDataConfig() GeoDataConfig {
+	return GeoDataConfig{
+		Preset:          "loyalsoldier",
+		AutoUpdate:      false,
+		ScheduleMode:    "daily",
+		ScheduleTime:    "04:00",
+		ScheduleWeekday: 1,
+		IntervalDays:    3,
+	}
 }
 
 type AuthConfig struct {
@@ -215,6 +244,7 @@ func DefaultState() AppState {
 	return AppState{
 		Version:   "1.0.0",
 		UpdatedAt: now,
+		GeoData:   DefaultGeoDataConfig(),
 		Auth: AuthConfig{
 			Enabled:  false,
 			Username: "admin",

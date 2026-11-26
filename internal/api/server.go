@@ -84,7 +84,7 @@ func NewServer(statePath, daeBin string, mockMode bool, mgr *daemon.Manager, web
 		}
 		s.syncTrackedEndpoints()
 		go s.runSubscriptionScheduler()
-		go s.runGeoScheduler()
+		go s.runGeoDataScheduler()
 	}
 	return s
 }
@@ -152,6 +152,14 @@ func (s *Server) loadOrInitState() error {
 				}
 			}
 			s.state = st
+			if normGeo, gErr := daemon.NormalizeGeoDataConfig(s.state.GeoData); gErr == nil {
+				normGeo.LastUpdatedAt = s.state.GeoData.LastUpdatedAt
+				normGeo.LastStatus = s.state.GeoData.LastStatus
+				normGeo.LastMessage = s.state.GeoData.LastMessage
+				s.state.GeoData = normGeo
+			} else {
+				s.state.GeoData = model.DefaultGeoDataConfig()
+			}
 			if s.state.Revision == "" {
 				s.state.Revision = randomToken()
 			}
@@ -178,7 +186,9 @@ func (s *Server) loadOrInitState() error {
 		cleanBase := s.initialState()
 		cleanBase.Subscriptions = []model.Subscription{}
 		cleanBase.Nodes = []model.Node{}
-		cleanBase.Groups = []model.Group{}
+		if !strings.Contains(string(existingBytes), "[DirectWithoutNodes]") {
+			cleanBase.Groups = []model.Group{}
+		}
 		if imported, impErr := compiler.ParseConfigDAE(string(existingBytes), cleanBase); impErr == nil {
 			if len(imported.Groups) == 0 && routingReferencesGroup(imported.Routing, "proxy") {
 				imported.Groups = []model.Group{
@@ -269,10 +279,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/stats", s.withAuth(s.handleStats))
 	mux.HandleFunc("GET /api/v1/doctor", s.withAuth(s.handleDoctor))
 	mux.HandleFunc("GET /api/v1/core/update", s.withAuth(s.handleCoreCheck))
-	mux.HandleFunc("GET /api/v1/geodata/update", s.withAuth(s.handleGeoCheck))
-	mux.HandleFunc("GET /api/v1/geodata/schedule", s.withAuth(s.handleGeoScheduleGet))
-	mux.HandleFunc("POST /api/v1/geodata/schedule", s.withAuth(s.withChange(s.handleGeoScheduleSave)))
-	mux.HandleFunc("POST /api/v1/geodata/update", s.withAuth(s.withChange(s.handleGeoInstall)))
 	mux.HandleFunc("POST /api/v1/core/update", s.withAuth(s.withChange(s.handleCoreInstall)))
 	mux.HandleFunc("GET /api/v1/panel/version", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"version": daemon.PanelVersion})
@@ -280,6 +286,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/panel/update", s.withAuth(s.handlePanelCheck))
 	mux.HandleFunc("POST /api/v1/panel/repo", s.withAuth(s.withChange(s.handlePanelRepoSave)))
 	mux.HandleFunc("POST /api/v1/panel/update", s.withAuth(s.withChange(s.handlePanelInstall)))
+	mux.HandleFunc("GET /api/v1/geodata", s.withAuth(s.handleGeoDataStatus))
+	mux.HandleFunc("POST /api/v1/geodata/config", s.withAuth(s.withChange(s.handleGeoDataSaveConfig)))
+	mux.HandleFunc("POST /api/v1/geodata/update", s.withAuth(s.handleGeoDataUpdate))
 	mux.HandleFunc("GET /api/v1/connectivity", s.withAuth(s.handleConnectivity))
 	mux.HandleFunc("POST /api/v1/settings/reset", s.withAuth(s.withChange(s.handleResetDefaults)))
 	mux.HandleFunc("POST /api/v1/state", s.withAuth(s.withChange(s.handleSaveState)))
@@ -667,15 +676,23 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	s.mu.RUnlock()
 
 	cfg := compiler.RenderConfig(st)
+	pendingApply := false
+	if !s.mockMode {
+		if diskCfg, err := os.ReadFile(s.mgr.ConfigPath()); err == nil {
+			pendingApply = strings.TrimSpace(string(diskCfg)) != strings.TrimSpace(cfg)
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"state":        clientState(st),
-		"revision":     st.Revision,
-		"panelVersion": daemon.PanelVersion,
-		"updateRepo":   daemon.EffectiveUpdateRepo(st.UpdateRepo),
-		"configDae":    cfg,
-		"stats":        s.mgr.Stats(),
-		"doctor":       daemon.RunSystemDoctor(s.daeBin, s.mockMode),
-		"logs":         s.mgr.Logs(),
+		"state":         clientState(st),
+		"revision":      st.Revision,
+		"pendingApply":  pendingApply,
+		"panelVersion":  daemon.PanelVersion,
+		"updateRepo":    daemon.EffectiveUpdateRepo(st.UpdateRepo),
+		"geoDataStatus": s.mgr.InspectGeoData(st.GeoData),
+		"configDae":     cfg,
+		"stats":         s.mgr.Stats(),
+		"doctor":        daemon.RunSystemDoctor(s.daeBin, s.mockMode),
+		"logs":          s.mgr.Logs(),
 	})
 }
 
@@ -928,6 +945,7 @@ func (s *Server) saveCandidate(w http.ResponseWriter, state model.AppState, appl
 	candidate := state.Clone()
 	candidate.Auth = previous.Auth
 	candidate.UpdateRepo = previous.UpdateRepo
+	candidate.GeoData = previous.GeoData
 	candidate.Snapshots = mergeSnapshotPayloads(candidate.Snapshots, previous.Snapshots)
 	if err := compiler.ValidateOutbounds(candidate); err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"ok": false, "error": err.Error()})
@@ -1151,6 +1169,7 @@ func (s *Server) handleSubParse(w http.ResponseWriter, r *http.Request) {
 	st := clientState(s.state)
 	cfg := compiler.RenderConfig(s.state)
 	s.mu.Unlock()
+	s.syncTrackedEndpoints()
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":             true,
@@ -1193,6 +1212,7 @@ func (s *Server) handleNodesImport(w http.ResponseWriter, r *http.Request) {
 	st := clientState(s.state)
 	cfg := compiler.RenderConfig(s.state)
 	s.mu.Unlock()
+	s.syncTrackedEndpoints()
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":             true,
@@ -1294,6 +1314,7 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 	}
 	newState.Auth = previous.Auth
 	newState.UpdateRepo = previous.UpdateRepo
+	newState.GeoData = previous.GeoData
 	newState.Snapshots = previous.Snapshots
 	if err := compiler.ValidateOutbounds(newState); err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
@@ -1326,6 +1347,7 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "保存配置状态失败: " + persistErr.Error()})
 		return
 	}
+	s.syncTrackedEndpoints()
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":        true,
@@ -1441,6 +1463,7 @@ func (s *Server) handleRestoreSnapshot(w http.ResponseWriter, r *http.Request) {
 	if targetSnap.StateJSON != "" && json.Unmarshal([]byte(targetSnap.StateJSON), &restored) == nil && restored.Version != "" {
 		restored.Auth = previous.Auth
 		restored.UpdateRepo = previous.UpdateRepo
+		restored.GeoData = previous.GeoData
 		restored.Snapshots = previous.Snapshots
 	} else {
 		var err error
@@ -1451,6 +1474,7 @@ func (s *Server) handleRestoreSnapshot(w http.ResponseWriter, r *http.Request) {
 		}
 		restored.Auth = previous.Auth
 		restored.UpdateRepo = previous.UpdateRepo
+		restored.GeoData = previous.GeoData
 		restored.Snapshots = previous.Snapshots
 	}
 
@@ -1484,6 +1508,7 @@ func (s *Server) handleRestoreSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "保存快照恢复状态失败: " + persistErr.Error()})
 		return
 	}
+	s.syncTrackedEndpoints()
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":        true,
@@ -1576,6 +1601,7 @@ func (s *Server) handleNodeSave(w http.ResponseWriter, r *http.Request) {
 	st := clientState(s.state)
 	cfg := compiler.RenderConfig(s.state)
 	s.mu.Unlock()
+	s.syncTrackedEndpoints()
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":        true,
@@ -1824,35 +1850,4 @@ func defaultString(s, def string) string {
 		return def
 	}
 	return strings.TrimSpace(s)
-}
-
-func (s *Server) handleGeoCheck(w http.ResponseWriter, r *http.Request) {
-	release, err := s.mgr.CheckGeo(r.Context(), r.URL.Query().Get("kind"))
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, release)
-}
-func (s *Server) handleGeoInstall(w http.ResponseWriter, r *http.Request) {
-	s.mu.RLock()
-	enabled := s.state.Auth.Enabled
-	s.mu.RUnlock()
-	if !enabled {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "请先启用面板登录鉴权"})
-		return
-	}
-	var req struct {
-		Kind   string `json:"kind"`
-		Digest string `json:"digest"`
-	}
-	if err := decodeJSONBody(w, r, 1024, &req); err != nil {
-		writeJSON(w, 400, map[string]string{"error": "请求格式无效"})
-		return
-	}
-	if err := s.mgr.InstallGeo(r.Context(), req.Kind, req.Digest); err != nil {
-		writeJSON(w, 422, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, 200, map[string]bool{"ok": true})
 }

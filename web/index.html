@@ -51,15 +51,15 @@
       <div class="sidebar-foot">
         <div class="foot-row">
           <span class="text-muted">面板版本</span>
-          <button id="side-panel-ver" type="button" class="tag tag-primary mono" style="cursor:pointer;" title="点击查看面板版本与检测更新">v1.0.2</button>
+          <button id="side-panel-ver" type="button" class="tag tag-primary mono ver-pill-btn" title="点击查看面板版本与检测更新">v1.0.8</button>
         </div>
         <div class="foot-row">
           <span class="text-muted">核心版本</span>
-          <span id="side-dae-ver" class="mono">dae</span>
+          <span id="side-dae-ver" class="mono foot-val">dae</span>
         </div>
         <div class="foot-row">
-          <span class="text-muted">快捷键</span>
-          <span><kbd>⌘S</kbd> 应用</span>
+          <span class="text-muted">快捷应用</span>
+          <span><kbd>⌘S</kbd> / <kbd>Ctrl+S</kbd></span>
         </div>
       </div>
     </aside>
@@ -76,15 +76,18 @@
             <span id="service-status-text">运行中</span>
           </div>
           <div class="header-rates mono">
-            <span>↓ <strong id="top-down-speed">0 B/s</strong></span>
-            <span class="sep">/</span>
-            <span>↑ <strong id="top-up-speed">0 B/s</strong></span>
+            <span class="rate-pill-down">↓ <strong id="top-down-speed">0 B/s</strong></span>
+            <span class="sep">·</span>
+            <span class="rate-pill-up">↑ <strong id="top-up-speed">0 B/s</strong></span>
           </div>
         </div>
 
         <div class="header-right">
-          <span id="unsaved-indicator" class="dirty-hint hidden">配置已修改，待应用</span>
-          <button id="btn-theme" class="btn btn-subtle btn-sm" title="切换深浅色外观">外观</button>
+          <span id="unsaved-indicator" class="dirty-hint hidden">
+            <span class="dirty-dot"></span>
+            <span>配置已修改，待应用</span>
+          </span>
+          <button id="btn-theme" class="btn btn-subtle btn-sm" title="切换深浅色外观">☀ 浅色</button>
           <button id="btn-save-apply" class="btn btn-primary btn-sm">保存并应用</button>
         </div>
       </header>

@@ -19,6 +19,9 @@ func ProductionDefaults() AppState {
 	if err := json.Unmarshal(data, &state); err != nil {
 		panic(err)
 	}
+	if state.GeoData.Preset == "" {
+		state.GeoData = DefaultGeoDataConfig()
+	}
 	state.UpdatedAt = time.Now().Format(time.RFC3339)
 	return state
 }

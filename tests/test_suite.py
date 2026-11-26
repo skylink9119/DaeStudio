@@ -253,6 +253,14 @@ proxies:
             r = self._api("/api/v1/service/action", {"action": action})
             self.assertTrue(r["ok"], msg=f"Action {action} failed: {r}")
 
+        geo_cfg = self._api(
+            "/api/v1/geodata/config",
+            {"preset": "loyalsoldier", "autoUpdate": True, "scheduleMode": "daily", "scheduleTime": "04:00"},
+        )
+        self.assertTrue(geo_cfg["ok"])
+        geo_upd = self._api("/api/v1/geodata/update", {"target": "all"})
+        self.assertTrue(geo_upd["ok"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

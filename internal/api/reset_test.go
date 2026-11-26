@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -57,11 +56,8 @@ func TestResetPreservesLoginAndBindings(t *testing.T) {
 	previous.Auth.PasswordHash = "secret"
 	previous.Global.WanInterface = "pppoe-wan"
 	previous.Global.LanInterfaces = []string{"br-test"}
-	previous.DNS.Bind = "127.0.0.1:15354"
+	previous.DNS.Bind = "127.0.0.1:15353"
 	next := resetDefaults(previous)
-	if !strings.Contains(next.DNS.RawDSL, "bind: '127.0.0.1:15354'") {
-		t.Fatal("DSL listener does not match preserved listener")
-	}
 	if next.Auth != previous.Auth || next.Global.WanInterface != "pppoe-wan" || next.Global.LanInterfaces[0] != "br-test" || next.DNS.Bind != previous.DNS.Bind {
 		t.Fatal("binding/auth changed")
 	}

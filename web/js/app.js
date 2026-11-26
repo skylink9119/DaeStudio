@@ -25,10 +25,18 @@ import { TrafficChart } from "./charts.js";
 const chart = new TrafficChart(36);
 let statsTimer = null;
 let statsPending = false;
+let modalLocked = false;
 
 // ============================================================================
 // Lifecycle & Global Bindings
 // ============================================================================
+
+function syncDirtyUI(dirty) {
+  store.dirty = Boolean(dirty);
+  document.getElementById("unsaved-indicator")?.classList.toggle("hidden", !store.dirty);
+  document.getElementById("btn-save-apply")?.classList.toggle("is-dirty", store.dirty);
+  syncNavCounts();
+}
 
 async function initApp() {
   applyTheme(store.theme);
@@ -50,13 +58,14 @@ async function loadBootstrap() {
   try {
     const data = await apiFetch("/api/v1/bootstrap");
     store.state = normalizeState(data.state);
-    store.panelVersion = data.panelVersion || store.panelVersion || "v1.0.2";
+    store.panelVersion = data.panelVersion || store.panelVersion || "v1.0.8";
     store.updateRepo = data.updateRepo ?? store.state?.updateRepo ?? "";
+    store.geoDataStatus = data.geoDataStatus || store.geoDataStatus;
     store.configDae = data.configDae || "";
     store.stats = data.stats || store.stats;
     store.doctor = data.doctor || null;
     store.logs = data.logs || [];
-    store.dirty = false;
+    syncDirtyUI(Boolean(data.pendingApply));
     chart.push(store.stats.uploadBps, store.stats.downloadBps);
 
     setText("side-panel-ver", store.panelVersion);
@@ -143,9 +152,7 @@ function mergePoolFromServerState(serverState, nextConfigDae = "") {
 }
 
 function markDirty() {
-  store.dirty = true;
-  document.getElementById("unsaved-indicator")?.classList.remove("hidden");
-  syncNavCounts();
+  syncDirtyUI(true);
 }
 
 function activeNodes(state = store.state) {
@@ -189,8 +196,7 @@ async function saveState(applyReload = true, candidate = store.state, outbound =
     store.state = normalizeState(res.state || candidate);
     if (res.configDae) store.configDae = res.configDae;
     if (res.stats) store.stats = res.stats;
-    store.dirty = false;
-    document.getElementById("unsaved-indicator")?.classList.add("hidden");
+    syncDirtyUI(false);
     const message = outbound ? "已切换到「" + outbound + "」" : applyReload ? "配置已应用" : "配置已保存";
     setApplyStatus(message, "success");
     toast(message, "success");
@@ -544,7 +550,7 @@ function renderOverview(root) {
                   <h2 class="panel-title">${escapeHTML(grp.name)}</h2>
                   <span class="panel-desc">${candidates.length} 个候选 · ${isAuto ? "自动选择" : "固定节点"}</span>
                 </div>
-                <div class="outbound-live-rate" data-grp-rate="${gIdx}">
+                <div class="outbound-live-rate ${(grpTraffic?.downloadBps || 0) + (grpTraffic?.uploadBps || 0) > 0 ? "is-flowing" : ""}" data-grp-rate="${gIdx}">
                   ${renderGroupRateHTML(grpTraffic, isAuto)}
                 </div>
               </div>
@@ -617,22 +623,22 @@ function renderOverview(root) {
         </div>
         <div class="metric-val mono" id="ov-uptime">${s.running ? formatUptime(s.uptimeSeconds) : "已停止"}</div>
         <div class="metric-meta mono" id="ov-proc-meta">
-          <span>PID: ${s.pid || "-"}</span>
-          <span>内存: ${s.memoryMb} MB</span>
-          <span>并发连接: ${s.activeConns}</span>
+          <span class="meta-chip">PID <strong>${s.pid || "-"}</strong></span>
+          <span class="meta-chip">内存 <strong>${s.memoryMb} MB</strong></span>
+          <span class="meta-chip">连接 <strong>${s.activeConns}</strong></span>
         </div>
       </div>
 
       <div class="metric-box">
         <div class="metric-label">
           <span>分流工作模式</span>
-          <span class="mono tag">${escapeHTML(st.global.dialMode)}</span>
+          <span class="mono tag tag-primary">${escapeHTML(st.global.dialMode)}</span>
         </div>
-        <div class="metric-val">${enabledNodes.length} <span style="font-size: 16px;font-weight:400;color:var(--text-sec);">个可用节点</span></div>
+        <div class="metric-val">${enabledNodes.length} <span style="font-size: 15px;font-weight:500;color:var(--text-sec);">个可用节点</span></div>
         <div class="metric-meta">
-          <span>LAN: <code class="mono">${escapeHTML((st.global.lanInterfaces || []).join(",") || "无")}</code></span>
-          <span>WAN: <code class="mono">${escapeHTML(st.global.wanInterface || "auto")}</code></span>
-          <span>默认出站: <code class="mono">${escapeHTML(st.routing.fallback)}</code></span>
+          <span class="meta-chip">LAN <strong class="mono">${escapeHTML((st.global.lanInterfaces || []).join(",") || "无")}</strong></span>
+          <span class="meta-chip">WAN <strong class="mono">${escapeHTML(st.global.wanInterface || "auto")}</strong></span>
+          <span class="meta-chip">兜底 <strong class="mono">${escapeHTML(st.routing.fallback)}</strong></span>
         </div>
       </div>
     </div>
@@ -708,14 +714,15 @@ function renderConnectivityBarDOM() {
   bar.innerHTML = items
     .map((it) => {
       const dotCls = store.checkingConn || it.ok === null ? "" : it.ok ? "ok" : "fail";
+      const cardCls = store.checkingConn || it.ok === null ? "" : it.ok ? "is-ok" : "is-fail";
       const rightHTML =
         store.checkingConn || it.ok === null
-          ? `<span class="text-muted mono" style="font-size: 15px;">检测中...</span>`
+          ? `<span class="tag mono">检测中…</span>`
           : it.ok
           ? `<span class="tag tag-ok mono">${it.latencyMs} ms</span>`
           : `<span class="tag tag-err">不通</span>`;
       return `
-        <div class="conn-item">
+        <div class="conn-item ${cardCls}">
           <div class="conn-name">
             <span class="status-dot ${dotCls}"></span>
             <span>${escapeHTML(it.name)}</span>
@@ -735,7 +742,7 @@ function updateOverviewLiveMetrics() {
   setText("ov-uptime", s.running ? formatUptime(s.uptimeSeconds) : "已停止");
   const meta = document.getElementById("ov-proc-meta");
   if (meta) {
-    meta.innerHTML = `<span>PID: ${s.pid || "-"}</span><span>内存: ${s.memoryMb} MB</span><span>并发连接: ${s.activeConns}</span>`;
+    meta.innerHTML = `<span class="meta-chip">PID <strong>${s.pid || "-"}</strong></span><span class="meta-chip">内存 <strong>${s.memoryMb} MB</strong></span><span class="meta-chip">连接 <strong>${s.activeConns}</strong></span>`;
   }
   const chartBox = document.getElementById("ov-chart");
   if (chartBox) chartBox.innerHTML = chart.renderSVG();
@@ -756,6 +763,7 @@ function updateOverviewLiveMetrics() {
       const candidates = pinned && !matched.some((n) => n.id === pinned.id) ? [pinned, ...matched] : matched;
       const isAuto = grp.policy !== "fixed";
       const traffic = computeGroupTraffic(grp, gIdx, candidates, pinned, isAuto, enabledNodes);
+      box.classList.toggle("is-flowing", (traffic?.downloadBps || 0) + (traffic?.uploadBps || 0) > 0);
       box.innerHTML = renderGroupRateHTML(traffic, isAuto);
     });
 
@@ -879,7 +887,7 @@ function renderProxiesAndSubs(root) {
                           <td>
                             ${
                               total > 0
-                                ? `<div class="mono" style="font-size: 15px;">${formatBytes(used)} / ${formatBytes(total)}</div>
+                                ? `<div class="mono" style="font-size: 13.5px;">${formatBytes(used)} / ${formatBytes(total)} <span class="text-muted">(${pct}%)</span></div>
                                    <div class="quota-bar"><div class="quota-fill" style="width:${pct}%"></div></div>`
                                 : `<span class="text-muted">—</span>`
                             }
@@ -949,12 +957,12 @@ function renderProxiesAndSubs(root) {
                           </label>
                         </td>
                         <td>
-                          <div style="font-weight:500;">${escapeHTML(n.name)}</div>
-                          <div class="text-muted mono" style="font-size: 14px;">tag: ${escapeHTML(n.tag)}</div>
+                          <div style="font-weight:600;">${escapeHTML(n.name)}</div>
+                          <div class="text-muted mono" style="font-size: 12.5px;">tag: ${escapeHTML(n.tag)}</div>
                         </td>
                         <td><span class="tag">${escapeHTML(n.subTag || "手动添加")}</span></td>
-                        <td><span class="tag tag-primary mono">${escapeHTML((n.protocol || "").toUpperCase())}</span></td>
-                        <td class="mono text-sec" style="font-size: 15px;">${escapeHTML(n.address)}:${n.port}</td>
+                        <td><span class="tag tag-primary proto-${escapeHTML((n.protocol || "").toLowerCase())} mono">${escapeHTML((n.protocol || "").toUpperCase())}</span></td>
+                        <td class="mono text-sec" style="font-size: 13.5px;">${escapeHTML(n.address)}:${n.port}</td>
                         <td>${latencyTagHTML(n.latencyMs)}</td>
                         <td style="text-align:right;white-space:nowrap;">
                           <button class="btn btn-sm btn-subtle" data-nd-probe="${escapeHTML(n.id)}">测速</button>
@@ -1200,24 +1208,32 @@ function openNodeModal(existing) {
       footerHTML: `<button class="btn" id="m-c">取消</button><button class="btn btn-primary" id="m-s">保存节点</button>`,
       onMount(box) {
         box.querySelector("#m-c")?.addEventListener("click", closeModal);
-        box.querySelector("#m-s")?.addEventListener("click", async () => {
-          const res = await apiFetch("/api/v1/nodes/save", {
-            method: "POST",
-            body: JSON.stringify({
-              id: existing.id,
-              name: box.querySelector("#m-nd-name").value.trim(),
-              tag: box.querySelector("#m-nd-tag").value.trim(),
-              uri: box.querySelector("#m-nd-uri").value.trim(),
-            }),
-          });
-          if (!res.ok) {
-            toast(res.error || "保存失败", "error");
-            return;
+        const saveBtn = box.querySelector("#m-s");
+        saveBtn?.addEventListener("click", async () => {
+          saveBtn.disabled = true;
+          try {
+            const res = await apiFetch("/api/v1/nodes/save", {
+              method: "POST",
+              body: JSON.stringify({
+                id: existing.id,
+                name: box.querySelector("#m-nd-name").value.trim(),
+                tag: box.querySelector("#m-nd-tag").value.trim(),
+                uri: box.querySelector("#m-nd-uri").value.trim(),
+              }),
+            });
+            if (!res.ok) {
+              toast(res.error || "保存失败", "error");
+              return;
+            }
+            mergePoolFromServerState(res.state, res.configDae);
+            markDirty();
+            closeModal();
+            renderPage();
+          } catch (err) {
+            toast("保存失败：" + err.message, "error");
+          } finally {
+            saveBtn.disabled = false;
           }
-          mergePoolFromServerState(res.state, res.configDae);
-          markDirty();
-          closeModal();
-          renderPage();
         });
       },
     });
@@ -1235,19 +1251,27 @@ function openNodeModal(existing) {
     footerHTML: `<button class="btn" id="m-c">取消</button><button class="btn btn-primary" id="m-s">解析导入</button>`,
     onMount(box) {
       box.querySelector("#m-c")?.addEventListener("click", closeModal);
-      box.querySelector("#m-s")?.addEventListener("click", async () => {
+      const saveBtn = box.querySelector("#m-s");
+      saveBtn?.addEventListener("click", async () => {
         const rawText = box.querySelector("#m-batch-uri").value.trim();
         if (!rawText) return;
-        const res = await apiFetch("/api/v1/nodes/import", { method: "POST", body: JSON.stringify({ rawText }) });
-        if (!res.ok) {
-          toast(res.error || "导入失败", "error");
-          return;
+        saveBtn.disabled = true;
+        try {
+          const res = await apiFetch("/api/v1/nodes/import", { method: "POST", body: JSON.stringify({ rawText }) });
+          if (!res.ok) {
+            toast(res.error || "导入失败", "error");
+            return;
+          }
+          mergePoolFromServerState(res.state, res.configDae);
+          markDirty();
+          closeModal();
+          toast(`已添加 ${res.addedCount} 个节点，请点击右上角「保存并应用」生效`, "success");
+          renderPage();
+        } catch (err) {
+          toast("导入失败：" + err.message, "error");
+        } finally {
+          saveBtn.disabled = false;
         }
-        mergePoolFromServerState(res.state, res.configDae);
-        markDirty();
-        closeModal();
-        toast(`已添加 ${res.addedCount} 个节点`, "success");
-        renderPage();
       });
     },
   });
@@ -1679,6 +1703,7 @@ function renderRules(root) {
           <button class="seg-tab ${rt.mode !== "dsl" ? "active" : ""}" id="rt-vis">表格视图</button>
           <button class="seg-tab ${rt.mode === "dsl" ? "active" : ""}" id="rt-dsl">DSL 源码</button>
         </div>
+        <button class="btn btn-sm" id="rt-btn-geodata" title="更新 geoip.dat / geosite.dat 分流数据库">Geo 数据库</button>
         ${rt.mode !== "dsl" ? `<button class="btn btn-sm btn-primary" id="rt-add">新增规则</button>` : ""}
       </div>
     </div>
@@ -1782,8 +1807,13 @@ function renderRules(root) {
 
   root.querySelector("#rt-vis")?.addEventListener("click", async () => {
     if (rt.mode === "dsl" && rt.rawDsl) {
-      const res = await apiFetch("/api/v1/routing/parse-dsl", { method: "POST", body: JSON.stringify({ dsl: rt.rawDsl }) });
-      if (res.ok) { rt.rules = res.rules || []; rt.fallback = res.fallback || rt.fallback; }
+      try {
+        const res = await apiFetch("/api/v1/routing/parse-dsl", { method: "POST", body: JSON.stringify({ dsl: rt.rawDsl }) });
+        if (res.ok) { rt.rules = res.rules || []; rt.fallback = res.fallback || rt.fallback; }
+      } catch (err) {
+        toast("解析分流 DSL 失败：" + err.message, "error");
+        return;
+      }
     }
     rt.mode = "visual";
     renderRules(root);
@@ -1795,18 +1825,29 @@ function renderRules(root) {
   });
   root.querySelector("#rt-dsl-area")?.addEventListener("input", (e) => { rt.rawDsl = e.target.value; markDirty(); });
   root.querySelector("#rt-parse-back")?.addEventListener("click", async () => {
-    const dsl = root.querySelector("#rt-dsl-area").value;
-    const res = await apiFetch("/api/v1/routing/parse-dsl", { method: "POST", body: JSON.stringify({ dsl }) });
-    if (res.ok) {
-      rt.rules = res.rules || [];
-      rt.fallback = res.fallback || rt.fallback;
-      rt.mode = "visual";
-      markDirty();
-      renderRules(root);
+    try {
+      const dsl = root.querySelector("#rt-dsl-area").value;
+      const res = await apiFetch("/api/v1/routing/parse-dsl", { method: "POST", body: JSON.stringify({ dsl }) });
+      if (res.ok) {
+        rt.rules = res.rules || [];
+        rt.fallback = res.fallback || rt.fallback;
+        rt.mode = "visual";
+        markDirty();
+        renderRules(root);
+      } else {
+        toast(res.error || "解析分流 DSL 失败", "error");
+      }
+    } catch (err) {
+      toast("解析分流 DSL 失败：" + err.message, "error");
     }
   });
 
   root.querySelector("#rt-add")?.addEventListener("click", () => openRuleModal(null, -1));
+  root.querySelector("#rt-btn-geodata")?.addEventListener("click", () => {
+    store.systemSubTab = "logs";
+    switchTab("system");
+    setTimeout(() => document.getElementById("geodata-panel")?.scrollIntoView({ behavior: "smooth", block: "center" }), 60);
+  });
   root.querySelectorAll("[data-r-tog]").forEach((c) => {
     c.addEventListener("change", () => { rt.rules[Number(c.dataset.rTog)].enabled = c.checked; markDirty(); renderRules(root); });
   });
@@ -1961,27 +2002,6 @@ function renderSystem(root) {
   else renderSysLogs(body);
 }
 
-function renderDnsRuleExpression(rule) {
-  const expression = String(rule.expr || "");
-  if (expression.length <= 180) return escapeHTML(expression);
-
-  const match = expression.match(/^qname\((.*)\)$/s);
-  const parts = match ? match[1].split(",").map((part) => part.trim()) : [];
-  const nodeDomains = new Set((store.state.nodes || [])
-    .filter((node) => node.enabled !== false)
-    .map((node) => String(node.address || "").toLowerCase()));
-  const isNodeRule = parts.length > 0 && parts.every((part) =>
-    part.startsWith("full:") && nodeDomains.has(part.slice(5).trim().toLowerCase()));
-  const label = isNodeRule
-    ? `节点入口 DNS · 共 ${parts.length} 个域名`
-    : "长匹配条件 · 展开查看";
-
-  return `<details>
-    <summary style="cursor:pointer;font-family:inherit;">${label}</summary>
-    <div style="margin-top:10px;max-height:240px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;">${escapeHTML(expression)}</div>
-  </details>`;
-}
-
 function renderSysNetDNS(container) {
   const g = store.state.global;
   const dns = store.state.dns;
@@ -1990,7 +2010,7 @@ function renderSysNetDNS(container) {
     .filter((n) => n && !n.startsWith("ip6") && !n.startsWith("gre") && !n.startsWith("erspan") && !n.startsWith("sit") && n !== "teql0" && n !== "tunl0" && n !== "dummy0");
 
   container.innerHTML = `
-    <div class="split-2">
+    <div class="split-2 split-2-top">
       <!-- Left: Network & Global -->
       <div class="panel panel-pad" style="display:flex;flex-direction:column;gap:14px;">
         <div class="panel-title">接口绑定与核心参数</div>
@@ -2160,7 +2180,7 @@ function renderSysNetDNS(container) {
                               <span class="toggle-slider"></span>
                             </label>
                           </td>
-                          <td class="mono" style="font-size: 15px;">${renderDnsRuleExpression(r)}</td>
+                          <td class="mono" style="font-size: 15px;">${escapeHTML(r.expr)}</td>
                           <td class="mono">${escapeHTML(r.target)}</td>
                         </tr>`
                       )
@@ -2188,7 +2208,7 @@ function renderSysNetDNS(container) {
                                      <span class="toggle-slider"></span>
                                    </label>
                                  </td>
-                                 <td class="mono" style="font-size: 15px;">${renderDnsRuleExpression(r)}</td>
+                                 <td class="mono" style="font-size: 15px;">${escapeHTML(r.expr)}</td>
                                  <td class="mono">${escapeHTML(r.target)}</td>
                                </tr>`
                              )
@@ -2223,19 +2243,31 @@ function renderSysNetDNS(container) {
   bindG("#s-nowait", (el) => (g.disableWaitingNetwork = el.checked));
 
   container.querySelector("#s-auth-save")?.addEventListener("click", async () => {
+    const authBtn = container.querySelector("#s-auth-save");
     const enabled = container.querySelector("#s-auth-on").checked;
     const username = container.querySelector("#s-auth-u").value.trim() || "admin";
-    const password = container.querySelector("#s-auth-p").value;
+    const passInput = container.querySelector("#s-auth-p");
+    const password = passInput.value;
     if (enabled && !password && !store.state.auth?.enabled) {
       toast("启用密码保护请先填写密码", "error");
       return;
     }
-    const res = await apiFetch("/api/v1/auth/update", { method: "POST", body: JSON.stringify({ enabled, username, password }) });
-    if (res.ok) {
-      store.token = res.token || store.token;
-      localStorage.setItem("daed_next_token", store.token);
-      store.state.auth = res.auth;
-      toast("密码保护设置已更新", "success");
+    authBtn.disabled = true;
+    try {
+      const res = await apiFetch("/api/v1/auth/update", { method: "POST", body: JSON.stringify({ enabled, username, password }) });
+      if (res.ok) {
+        store.token = res.token || store.token;
+        localStorage.setItem("daed_next_token", store.token);
+        store.state.auth = res.auth;
+        passInput.value = "";
+        toast("密码保护设置已更新", "success");
+      } else {
+        toast(res.error || "保存鉴权设置失败", "error");
+      }
+    } catch (err) {
+      toast("保存鉴权设置失败：" + err.message, "error");
+    } finally {
+      authBtn.disabled = false;
     }
   });
 
@@ -2392,13 +2424,14 @@ async function renderSysConfigFile(container) {
   } catch (_) {}
 
   const snaps = store.state.snapshots || [];
+  const isZeroNodeDirect = Boolean(store.state.directWithoutNodes && activeNodes(store.state).length === 0);
 
   container.innerHTML = `
     <div class="panel panel-pad" style="display:flex;flex-direction:column;gap:12px;">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
         <div>
           <div class="panel-title">原生 /etc/dae/config.dae 在线编辑</div>
-          <div class="panel-desc">可直接修改下方完整配置文件并点击「解析并应用」，所有更改将双向同步回可视化表单</div>
+          <div class="panel-desc">可直接修改下方完整配置文件并点击「解析并热重载」，所有更改将双向同步回可视化表单</div>
         </div>
         <div class="toolbar">
           <button class="btn btn-sm btn-danger-text" id="cfg-btn-reset">恢复默认设置</button>
@@ -2408,6 +2441,11 @@ async function renderSysConfigFile(container) {
           <button class="btn btn-sm btn-primary" id="cfg-btn-apply-raw">解析并热重载</button>
         </div>
       </div>
+      ${
+        isZeroNodeDirect
+          ? `<div class="info-banner">当前尚无可用代理节点，运行中的 <code class="mono">config.dae</code> 已自动切换为安全直连回退配置；您预设的完整策略组与分流规则模板已安全保留，导入节点并点击「保存并应用」后将自动恢复完整分流。</div>`
+          : ""
+      }
       <textarea id="cfg-raw-editor" class="code-area mono" style="min-height:440px;">${escapeHTML(store.configDae)}</textarea>
     </div>
 
@@ -2455,11 +2493,21 @@ async function renderSysConfigFile(container) {
     openResetDefaultsModal();
   });
   container.querySelector("#cfg-btn-snap")?.addEventListener("click", async () => {
-    const res = await apiFetch("/api/v1/snapshots", { method: "POST", body: JSON.stringify({}) });
-    if (res.ok) {
-      store.state.snapshots = res.snapshots;
-      toast("已保存配置备份快照", "success");
-      renderSysConfigFile(container);
+    const snapBtn = container.querySelector("#cfg-btn-snap");
+    snapBtn.disabled = true;
+    try {
+      const res = await apiFetch("/api/v1/snapshots", { method: "POST", body: JSON.stringify({}) });
+      if (res.ok) {
+        store.state.snapshots = res.snapshots;
+        toast("已保存配置备份快照", "success");
+        renderSysConfigFile(container);
+      } else {
+        toast(res.error || "保存快照失败", "error");
+      }
+    } catch (err) {
+      toast("保存快照失败：" + err.message, "error");
+    } finally {
+      snapBtn.disabled = false;
     }
   });
   container.querySelector("#cfg-btn-apply-raw")?.addEventListener("click", async () => {
@@ -2481,8 +2529,7 @@ async function renderSysConfigFile(container) {
       store.configDae = imp.configDae;
       if (imp.stats) store.stats = imp.stats;
       if (imp.logs) store.logs = imp.logs;
-      store.dirty = false;
-      document.getElementById("unsaved-indicator")?.classList.add("hidden");
+      syncDirtyUI(false);
       setApplyStatus("config.dae 已解析并热重载生效", "success");
       toast("config.dae 已解析并热重载生效", "success");
       syncHeader();
@@ -2549,9 +2596,8 @@ function openResetDefaultsModal() {
           store.state = normalizeState(result.state);
           store.configDae = result.configDae || "";
           store.stats = result.stats || store.stats;
-          store.dirty = false;
           store.selectedGroupIdx = 0;
-          document.getElementById("unsaved-indicator")?.classList.add("hidden");
+          syncDirtyUI(false);
           setApplyStatus("已恢复通用默认配置", "success");
           closeModal();
           syncHeader();
@@ -2643,8 +2689,7 @@ function openRestoreSnapshotModal(snapshot) {
           store.configDae = res.configDae || "";
           if (res.stats) store.stats = res.stats;
           if (res.logs) store.logs = res.logs;
-          store.dirty = false;
-          document.getElementById("unsaved-indicator")?.classList.add("hidden");
+          syncDirtyUI(false);
           const doneMsg = willReload ? `已恢复快照「${snapshot.name}」并热重载生效` : `已恢复快照「${snapshot.name}」`;
           setApplyStatus(doneMsg, "success");
           closeModal();
@@ -2737,13 +2782,63 @@ function bindCoreUpdate(container) {
   });
 }
 
+function openUpdateRepoModal(container) {
+  const currentCustom = store.state?.updateRepo || "";
+  openModal({
+    title: "设置面板更新源仓库",
+    bodyHTML: `
+      <div class="field full">
+        <label class="field-label">GitHub 仓库地址 (格式：owner/repo 或完整 GitHub 链接，留空使用内置默认源)</label>
+        <input id="m-up-repo" class="input mono" value="${escapeHTML(currentCustom)}" placeholder="${escapeHTML(store.updateRepo || "skylink9119/DaeStudio")}" />
+        <span class="field-hint">当前生效更新源：<code class="mono">${escapeHTML(store.updateRepo || "未指定")}</code></span>
+      </div>
+    `,
+    footerHTML: `
+      <button class="btn" id="m-repo-cancel">取消</button>
+      <button class="btn btn-primary" id="m-repo-save">保存更新源</button>
+    `,
+    onMount(box) {
+      box.querySelector("#m-repo-cancel")?.addEventListener("click", closeModal);
+      const saveBtn = box.querySelector("#m-repo-save");
+      const input = box.querySelector("#m-up-repo");
+      saveBtn?.addEventListener("click", async () => {
+        saveBtn.disabled = true;
+        try {
+          const raw = input.value.trim();
+          const res = await apiFetch("/api/v1/panel/repo", {
+            method: "POST",
+            body: JSON.stringify({ repo: raw }),
+          });
+          if (!res.ok) {
+            toast(res.error || "保存更新源失败", "error");
+            return;
+          }
+          if (store.state) store.state.updateRepo = raw ? res.repo : "";
+          store.updateRepo = res.repo || "";
+          closeModal();
+          toast("面板更新源已更新", "success");
+          renderSysLogs(container);
+        } catch (err) {
+          toast("保存更新源失败：" + err.message, "error");
+        } finally {
+          saveBtn.disabled = false;
+        }
+      });
+      input?.focus();
+    },
+  });
+}
+
 function bindPanelUpdate(container) {
   const checkBtn = container.querySelector("#panel-check");
   const installBtn = container.querySelector("#panel-install");
+  const repoBtn = container.querySelector("#panel-repo-btn");
   const statusEl = container.querySelector("#panel-update-status");
   const releaseLink = container.querySelector("#panel-release-link");
   let latestVersion = "";
   let checkedRepo = "";
+
+  repoBtn?.addEventListener("click", () => openUpdateRepoModal(container));
 
   checkBtn?.addEventListener("click", async () => {
     checkBtn.disabled = true;
@@ -2752,6 +2847,11 @@ function bindPanelUpdate(container) {
     try {
       statusEl.textContent = "正在查询 DaeStudio 最新版本…";
       const release = await apiFetch("/api/v1/panel/update", { timeoutMs: 25000 });
+      if (release.needRepoConfig) {
+        statusEl.textContent = "未配置默认更新仓库，请点击下方「更新源」设置 GitHub 仓库";
+        openUpdateRepoModal(container);
+        return;
+      }
       if (release.error) throw new Error(release.error);
       latestVersion = release.latest;
       checkedRepo = release.repo;
@@ -2811,7 +2911,7 @@ function bindPanelUpdate(container) {
             for (let attempt = 0; attempt < 18; attempt++) {
               await new Promise((r) => setTimeout(r, 1500));
               try {
-                const boot = await apiFetch("/api/v1/panel/version", { timeoutMs: 2000 });
+                const boot = await apiFetch("/api/v1/panel/version", { timeoutMs: 2500, cache: "no-store" });
                 if (boot?.version === latestVersion) {
                   window.location.reload();
                   return;
@@ -2831,19 +2931,247 @@ function bindPanelUpdate(container) {
   });
 }
 
+const WEEKDAY_NAMES = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+function formatGeoPresetName(preset) {
+  const p = String(preset || "loyalsoldier").toLowerCase();
+  if (p === "metacubex") return "MetaCubeX 规则库";
+  if (p === "v2fly") return "v2fly 标准源";
+  if (p === "custom") return "自定义规则源";
+  return "Loyalsoldier 增强版";
+}
+
+function formatGeoScheduleBadge(cfg) {
+  if (!cfg?.autoUpdate) return "手动更新";
+  const t = cfg.scheduleTime || "04:00";
+  if (cfg.scheduleMode === "weekly") {
+    return `定时 · 每${WEEKDAY_NAMES[cfg.scheduleWeekday ?? 1] || "周一"} ${t}`;
+  }
+  if (cfg.scheduleMode === "interval") {
+    return `定时 · 每 ${cfg.intervalDays || 3} 天 ${t}`;
+  }
+  return `定时 · 每天 ${t}`;
+}
+
+function formatDateTimeShort(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function openGeoDataConfigModal(container) {
+  const cur = store.geoDataStatus?.config || store.state?.geoData || {
+    preset: "loyalsoldier",
+    autoUpdate: false,
+    scheduleMode: "daily",
+    scheduleTime: "04:00",
+    scheduleWeekday: 1,
+    intervalDays: 3,
+  };
+
+  openModal({
+    title: "GeoIP / GeoSite 分流数据库更新与定时设置",
+    bodyHTML: `
+      <div class="form-grid">
+        <div class="field full">
+          <label class="field-label">规则数据库上游源</label>
+          <select id="m-geo-preset" class="select">
+            <option value="loyalsoldier" ${cur.preset !== "metacubex" && cur.preset !== "v2fly" && cur.preset !== "custom" ? "selected" : ""}>Loyalsoldier/v2ray-rules-dat 增强版（推荐 · 含 SHA-256 校验）</option>
+            <option value="metacubex" ${cur.preset === "metacubex" ? "selected" : ""}>MetaCubeX/meta-rules-dat 规则库（含 SHA-256 校验）</option>
+            <option value="v2fly" ${cur.preset === "v2fly" ? "selected" : ""}>v2fly 官方标准源（含 SHA-256 校验）</option>
+            <option value="custom" ${cur.preset === "custom" ? "selected" : ""}>自定义 HTTPS 下载地址 / 加速镜像</option>
+          </select>
+        </div>
+
+        <div id="m-geo-custom-box" class="field full ${cur.preset === "custom" ? "" : "hidden"}" style="display:flex;flex-direction:column;gap:10px;padding:12px 14px;border-radius:10px;background:var(--bg-subtle);border:1px solid var(--border);">
+          <div class="field">
+            <label class="field-label">geoip.dat 下载地址 (仅支持 HTTPS)</label>
+            <input id="m-geo-ip-url" class="input mono" value="${escapeHTML(cur.geoipUrl || "")}" placeholder="https://.../geoip.dat" />
+          </div>
+          <div class="field">
+            <label class="field-label">geosite.dat 下载地址 (仅支持 HTTPS)</label>
+            <input id="m-geo-site-url" class="input mono" value="${escapeHTML(cur.geositeUrl || "")}" placeholder="https://.../geosite.dat" />
+          </div>
+          <div class="form-grid">
+            <div class="field">
+              <label class="field-label">geoip SHA-256 地址 (可选)</label>
+              <input id="m-geo-ip-sum" class="input mono" value="${escapeHTML(cur.geoipSumUrl || "")}" placeholder="https://.../geoip.dat.sha256sum" />
+            </div>
+            <div class="field">
+              <label class="field-label">geosite SHA-256 地址 (可选)</label>
+              <input id="m-geo-site-sum" class="input mono" value="${escapeHTML(cur.geositeSumUrl || "")}" placeholder="https://.../geosite.dat.sha256sum" />
+            </div>
+          </div>
+        </div>
+
+        <div class="field full" style="padding-top:4px;border-top:1px solid var(--border);">
+          <label class="toggle">
+            <input type="checkbox" id="m-geo-auto" ${cur.autoUpdate ? "checked" : ""}/>
+            <span class="toggle-slider"></span>
+            <span style="font-weight:600;">启用定时自动更新（校验并替换后自动平滑热重载 dae）</span>
+          </label>
+          <span class="field-hint">若上游文件 SHA-256 与本机一致，将自动跳过重复下载与闪存写入</span>
+        </div>
+
+        <div class="field">
+          <label class="field-label">自动更新频率</label>
+          <select id="m-geo-mode" class="select">
+            <option value="daily" ${cur.scheduleMode !== "weekly" && cur.scheduleMode !== "interval" ? "selected" : ""}>每天固定时间</option>
+            <option value="weekly" ${cur.scheduleMode === "weekly" ? "selected" : ""}>每周固定时间</option>
+            <option value="interval" ${cur.scheduleMode === "interval" ? "selected" : ""}>按间隔天数</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label class="field-label">执行时间 (软路由本地时间)</label>
+          <input id="m-geo-time" type="time" class="input mono" value="${escapeHTML(cur.scheduleTime || "04:00")}" />
+        </div>
+
+        <div id="m-geo-week-wrap" class="field full ${cur.scheduleMode === "weekly" ? "" : "hidden"}">
+          <label class="field-label">每周执行日</label>
+          <select id="m-geo-weekday" class="select">
+            ${WEEKDAY_NAMES.map((w, idx) => `<option value="${idx}" ${Number(cur.scheduleWeekday ?? 1) === idx ? "selected" : ""}>每${w}</option>`).join("")}
+          </select>
+        </div>
+
+        <div id="m-geo-int-wrap" class="field full ${cur.scheduleMode === "interval" ? "" : "hidden"}">
+          <label class="field-label">间隔天数 (1 ~ 30 天)</label>
+          <input id="m-geo-days" type="number" min="1" max="30" class="input mono" value="${cur.intervalDays || 3}" />
+        </div>
+      </div>
+    `,
+    footerHTML: `
+      <button class="btn" id="m-geo-cancel">取消</button>
+      <button class="btn btn-primary" id="m-geo-save">保存设置</button>
+    `,
+    onMount(box) {
+      const presetSel = box.querySelector("#m-geo-preset");
+      const customBox = box.querySelector("#m-geo-custom-box");
+      const modeSel = box.querySelector("#m-geo-mode");
+      const weekWrap = box.querySelector("#m-geo-week-wrap");
+      const intWrap = box.querySelector("#m-geo-int-wrap");
+      const saveBtn = box.querySelector("#m-geo-save");
+
+      presetSel?.addEventListener("change", () => {
+        customBox?.classList.toggle("hidden", presetSel.value !== "custom");
+      });
+      modeSel?.addEventListener("change", () => {
+        weekWrap?.classList.toggle("hidden", modeSel.value !== "weekly");
+        intWrap?.classList.toggle("hidden", modeSel.value !== "interval");
+      });
+      box.querySelector("#m-geo-cancel")?.addEventListener("click", closeModal);
+      saveBtn?.addEventListener("click", async () => {
+        saveBtn.disabled = true;
+        try {
+          const payload = {
+            preset: presetSel.value,
+            geoipUrl: box.querySelector("#m-geo-ip-url")?.value.trim() || "",
+            geositeUrl: box.querySelector("#m-geo-site-url")?.value.trim() || "",
+            geoipSumUrl: box.querySelector("#m-geo-ip-sum")?.value.trim() || "",
+            geositeSumUrl: box.querySelector("#m-geo-site-sum")?.value.trim() || "",
+            autoUpdate: box.querySelector("#m-geo-auto").checked,
+            scheduleMode: modeSel.value,
+            scheduleTime: box.querySelector("#m-geo-time").value || "04:00",
+            scheduleWeekday: Number(box.querySelector("#m-geo-weekday")?.value ?? 1),
+            intervalDays: Math.max(1, Math.min(30, Number(box.querySelector("#m-geo-days")?.value || 3))),
+          };
+          const res = await apiFetch("/api/v1/geodata/config", {
+            method: "POST",
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            toast(res.error || "保存设置失败", "error");
+            return;
+          }
+          if (res.geoDataStatus) store.geoDataStatus = res.geoDataStatus;
+          if (store.state && res.geoData) store.state.geoData = res.geoData;
+          closeModal();
+          toast(payload.autoUpdate ? "已开启分流数据库定时自动更新" : "分流数据库设置已保存", "success");
+          renderSysLogs(container);
+        } catch (err) {
+          toast("保存设置失败：" + err.message, "error");
+        } finally {
+          saveBtn.disabled = false;
+        }
+      });
+    },
+  });
+}
+
+function bindGeoDataPanel(container) {
+  const cfgBtn = container.querySelector("#geo-btn-cfg");
+  const allBtn = container.querySelector("#geo-btn-all");
+  const statusEl = container.querySelector("#geo-status-text");
+  const targetBtns = container.querySelectorAll("[data-geo-target]");
+
+  cfgBtn?.addEventListener("click", () => openGeoDataConfigModal(container));
+
+  const triggerUpdate = async (target, label) => {
+    if (store.geoUpdating) return;
+    store.geoUpdating = true;
+    if (allBtn) allBtn.disabled = true;
+    if (cfgBtn) cfgBtn.disabled = true;
+    targetBtns.forEach((b) => (b.disabled = true));
+    if (statusEl) {
+      statusEl.textContent = `正在拉取并校验 ${label}（含 dae 配置兼容预检，请稍候）…`;
+    }
+    try {
+      const res = await apiFetch("/api/v1/geodata/update", {
+        method: "POST",
+        timeoutMs: 210000,
+        body: JSON.stringify({ target }),
+      });
+      if (res.geoDataStatus) {
+        store.geoDataStatus = res.geoDataStatus;
+        if (store.state && res.geoDataStatus.config) {
+          store.state.geoData = res.geoDataStatus.config;
+        }
+      }
+      if (!res.ok) {
+        throw new Error(res.error || "更新分流数据库失败");
+      }
+      toast(res.message || "分流数据库已更新", "success");
+      store.geoUpdating = false;
+      renderSysLogs(container);
+    } catch (err) {
+      store.geoUpdating = false;
+      toast("更新失败：" + err.message, "error");
+      renderSysLogs(container);
+    }
+  };
+
+  allBtn?.addEventListener("click", () => triggerUpdate("all", "geoip.dat 与 geosite.dat"));
+  targetBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const t = btn.dataset.geoTarget;
+      triggerUpdate(t, t === "geoip" ? "geoip.dat" : "geosite.dat");
+    });
+  });
+}
+
 function renderSysLogs(container) {
   const checks = store.doctor?.checks || [];
+  const activeRepo = store.updateRepo || "未指定";
+  const geoSt = store.geoDataStatus || {};
+  const geoCfg = geoSt.config || store.state?.geoData || { preset: "loyalsoldier", autoUpdate: false, scheduleMode: "daily", scheduleTime: "04:00" };
+  const geoIP = geoSt.geoip || {};
+  const geoSite = geoSt.geosite || {};
+  const busyGeo = Boolean(store.geoUpdating || geoSt.updating);
+  const geoSubMsg = geoCfg.lastMessage
+    ? `${geoCfg.lastStatus === "error" ? "上次异常：" : ""}${geoCfg.lastMessage}`
+    : `存储目录 ${geoSt.dir || "/usr/share/dae"} · 更新前自动执行 SHA-256 与 dae 配置兼容预检`;
 
   container.innerHTML = `
     <div class="split-2">
-      <div class="panel">
+      <div class="panel" style="display:flex;flex-direction:column;justify-content:space-between;">
         <div class="panel-head">
           <div>
             <div style="display:flex;align-items:center;gap:8px;">
               <span class="panel-title">DaeStudio 面板更新</span>
-              <span class="tag tag-primary mono">${escapeHTML(store.panelVersion || "v1.0.2")}</span>
+              <span class="tag tag-primary mono">${escapeHTML(store.panelVersion || "v1.0.8")}</span>
             </div>
-            <div id="panel-update-status" class="section-sub" aria-live="polite">当前版本 ${escapeHTML(store.panelVersion || "v1.0.2")} · 支持在线检测与 SHA-256 校验升级</div>
+            <div id="panel-update-status" class="section-sub" aria-live="polite">当前版本 ${escapeHTML(store.panelVersion || "v1.0.8")} · 支持在线检测与 SHA-256 校验升级</div>
           </div>
           <div class="toolbar">
             <a id="panel-release-link" class="btn btn-sm hidden" target="_blank" rel="noopener noreferrer">发行说明</a>
@@ -2851,9 +3179,13 @@ function renderSysLogs(container) {
             <button class="btn btn-primary btn-sm hidden" id="panel-install">一键升级</button>
           </div>
         </div>
+        <div class="panel-foot">
+          <span>更新仓库：<span class="mono">${escapeHTML(activeRepo)}</span></span>
+          <button type="button" class="btn btn-subtle btn-sm" id="panel-repo-btn" style="height:26px;min-height:26px;padding:0 8px;font-size:12px;">更新源</button>
+        </div>
       </div>
 
-      <div class="panel">
+      <div class="panel" style="display:flex;flex-direction:column;justify-content:space-between;">
         <div class="panel-head">
           <div>
             <div class="panel-title">dae 内核更新</div>
@@ -2865,46 +3197,82 @@ function renderSysLogs(container) {
             <button class="btn btn-primary btn-sm hidden" id="core-install">下载并安装</button>
           </div>
         </div>
-        <div style="padding:11px 20px;background:var(--bg-subtle);font-size:13px;color:var(--text-muted);">
-          自动同步官方 <span class="mono">daeuniverse/dae</span> 稳定版内核并校验配置兼容性
+        <div class="panel-foot">
+          <span>自动同步官方 <span class="mono">daeuniverse/dae</span> 稳定版内核并校验配置兼容性</span>
         </div>
       </div>
     </div>
-    <div class="split-2">
-      ${["geosite", "geoip"].map(kind => `
-        <div class="panel"><div class="panel-head">
-          <div><div class="panel-title">${kind === "geosite" ? "GeoSite 域名" : "GeoIP 地址"}数据库</div>
-          <div id="${kind}-status" class="section-sub" aria-live="polite">${kind}.dat · V2Fly 官方数据源</div></div>
-          <div class="toolbar"><button class="btn btn-sm" id="${kind}-check">检测更新</button>
-          <button class="btn btn-primary btn-sm hidden" id="${kind}-install">更新数据库</button></div>
-        </div></div>`).join("")}
-    </div>
-    <div class="panel" style="margin-bottom:20px;padding:20px;">
-      <div class="panel-title">数据库每周定时更新</div>
-      <div class="section-sub">北京时间（UTC+8）。网页关闭后仍执行；错过时间不超过 24 小时会补执行一次，超过则跳过。</div>
-      <div class="toolbar" style="margin-top:12px;flex-wrap:wrap;">
-        <label><input type="checkbox" id="geo-schedule-enabled"> 启用</label>
-        <select class="select" id="geo-schedule-day" aria-label="每周星期">${["日","一","二","三","四","五","六"].map((v,i)=>`<option value="${i}">星期${v}</option>`).join("")}</select>
-        <input type="time" class="input" id="geo-schedule-time" aria-label="执行时间" value="04:00" style="width:140px;">
-        <select class="select" id="geo-schedule-mode" aria-label="执行模式"><option value="check">仅检查更新</option><option value="update">检查并自动更新</option></select>
-        <button class="btn btn-primary" id="geo-schedule-save" disabled>保存定时设置</button>
+
+    <div id="geodata-panel" class="panel">
+      <div class="panel-head">
+        <div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span class="panel-title">GeoIP / GeoSite 分流数据库</span>
+            <span class="tag tag-primary">${escapeHTML(formatGeoPresetName(geoCfg.preset))}</span>
+            <span class="tag ${geoCfg.autoUpdate ? "tag-ok" : ""} mono">${escapeHTML(formatGeoScheduleBadge(geoCfg))}</span>
+          </div>
+          <div id="geo-status-text" class="section-sub" aria-live="polite">${escapeHTML(geoSubMsg)}</div>
+        </div>
+        <div class="toolbar">
+          <button class="btn btn-sm" id="geo-btn-cfg" ${busyGeo ? "disabled" : ""}>定时与源设置</button>
+          <button class="btn btn-primary btn-sm" id="geo-btn-all" ${busyGeo ? "disabled" : ""}>${busyGeo ? "正在更新…" : "立即更新全部"}</button>
+        </div>
       </div>
-      <div class="section-sub" id="geo-schedule-status" aria-live="polite">正在读取定时设置…</div>
+
+      <div class="geo-grid">
+        <div class="geo-file-card">
+          <div style="min-width:0;">
+            <div class="geo-file-title">
+              <span class="mono">geoip.dat</span>
+              <span class="tag ${geoIP.exists ? "tag-ok" : "tag-warn"}">${geoIP.exists ? "已就绪" : "缺失"}</span>
+            </div>
+            <div class="geo-file-meta mono">
+              ${geoIP.exists ? `${formatBytes(geoIP.sizeBytes)}${geoIP.modified ? ` · 文件时间 ${escapeHTML(formatDateTimeShort(geoIP.modified))}` : ""}` : "尚未检测到 geoip.dat，请点击更新自动下载"}
+            </div>
+          </div>
+          <button type="button" class="btn btn-sm" data-geo-target="geoip" ${busyGeo ? "disabled" : ""}>更新 GeoIP</button>
+        </div>
+
+        <div class="geo-file-card">
+          <div style="min-width:0;">
+            <div class="geo-file-title">
+              <span class="mono">geosite.dat</span>
+              <span class="tag ${geoSite.exists ? "tag-ok" : "tag-warn"}">${geoSite.exists ? "已就绪" : "缺失"}</span>
+            </div>
+            <div class="geo-file-meta mono">
+              ${geoSite.exists ? `${formatBytes(geoSite.sizeBytes)}${geoSite.modified ? ` · 文件时间 ${escapeHTML(formatDateTimeShort(geoSite.modified))}` : ""}` : "尚未检测到 geosite.dat，请点击更新自动下载"}
+            </div>
+          </div>
+          <button type="button" class="btn btn-sm" data-geo-target="geosite" ${busyGeo ? "disabled" : ""}>更新 GeoSite</button>
+        </div>
+      </div>
+
+      <div class="panel-foot">
+        <span>${
+          geoCfg.autoUpdate && geoSt.nextRunAt
+            ? `下次自动更新：<strong class="mono" style="color:var(--text);">${escapeHTML(formatDateTimeShort(geoSt.nextRunAt))}</strong>（替换后自动平滑热重载 dae）`
+            : "点击「定时与源设置」可开启每天 / 每周或按间隔天数自动更新，并切换上游规则源"
+        }</span>
+        ${geoCfg.lastUpdatedAt ? `<span class="mono">最近执行：${escapeHTML(formatDateTimeShort(geoCfg.lastUpdatedAt))}</span>` : ""}
+      </div>
     </div>
     <div class="conn-bar">
       ${checks
         .map((c) => {
           const ok = c.status === "pass" || c.status === "info";
+          const isWarn = c.status === "warn";
+          const dotCls = ok ? "ok" : isWarn ? "warn" : "fail";
+          const tagCls = ok ? "tag-ok" : isWarn ? "tag-warn" : "tag-err";
           return `
-            <div class="conn-item">
-              <div>
+            <div class="conn-item ${ok ? "is-ok" : "is-fail"}" title="${escapeHTML(c.remediation || c.requirement || "")}">
+              <div style="min-width:0;">
                 <div class="conn-name">
-                  <span class="status-dot ${ok ? "ok" : "fail"}"></span>
+                  <span class="status-dot ${dotCls}"></span>
                   <span>${escapeHTML(c.title.split(" (")[0])}</span>
                 </div>
-                <div class="text-muted mono" style="font-size: 14px;margin-top:3px;padding-left:16px;">${escapeHTML(c.current.split("\n")[0])}</div>
+                <div class="text-muted mono" style="font-size: 12.5px;margin-top:3px;padding-left:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHTML(c.current.split("\n")[0])}</div>
               </div>
-              <span class="tag ${ok ? "tag-ok" : "tag-err"} mono">${c.status.toUpperCase()}</span>
+              <span class="tag ${tagCls} mono">${c.status.toUpperCase()}</span>
             </div>
           `;
         })
@@ -2916,7 +3284,7 @@ function renderSysLogs(container) {
         <div class="toolbar">
           <span class="panel-title">实时运行日志</span>
           <select id="lg-lvl" class="select select-sm" style="width:115px;">
-            ${["ALL", "info", "warn", "error"].map((l) => `<option value="${l}" ${store.logLevelFilter === l ? "selected" : ""}>${l === "ALL" ? "全部级别" : l.toUpperCase()}</option>`).join("")}
+            ${["ALL", "info", "warn", "error", "debug"].map((l) => `<option value="${l}" ${store.logLevelFilter === l ? "selected" : ""}>${l === "ALL" ? "全部级别" : l.toUpperCase()}</option>`).join("")}
           </select>
           <input id="lg-q" class="input input-sm" style="width:200px;" placeholder="筛选日志内容..." value="${escapeHTML(store.logSearch)}" />
         </div>
@@ -2928,8 +3296,7 @@ function renderSysLogs(container) {
 
   bindPanelUpdate(container);
   bindCoreUpdate(container);
-  bindGeoUpdates(container);
-  bindGeoSchedule(container);
+  bindGeoDataPanel(container);
   renderLogsListDOM();
 
   container.querySelector("#lg-lvl")?.addEventListener("change", (e) => { store.logLevelFilter = e.target.value; renderLogsListDOM(); });
@@ -2971,43 +3338,71 @@ function renderLogsListDOM() {
 function openLoginModal() {
   openModal({
     title: "登录 DaeStudio",
+    locked: true,
     bodyHTML: `
-      <div class="field"><label class="field-label">账号</label><input id="lg-u" class="input" value="admin" /></div>
-      <div class="field"><label class="field-label">密码</label><input id="lg-p" type="password" class="input" /></div>
+      <div class="field"><label class="field-label">管理员账号</label><input id="lg-u" class="input" value="admin" autocomplete="username" /></div>
+      <div class="field"><label class="field-label">访问密码</label><input id="lg-p" type="password" class="input" placeholder="请输入面板密码" autocomplete="current-password" /></div>
     `,
-    footerHTML: `<button class="btn btn-primary" id="lg-go">登录</button>`,
+    footerHTML: `<button class="btn btn-primary" id="lg-go">登录面板</button>`,
     onMount(box) {
-      box.querySelector("#lg-go")?.addEventListener("click", async () => {
-        const res = await apiFetch("/api/v1/auth/login", {
-          method: "POST",
-          body: JSON.stringify({
-            username: box.querySelector("#lg-u").value.trim(),
-            password: box.querySelector("#lg-p").value,
-          }),
-        });
-        if (res.ok && res.token) {
-          store.token = res.token;
-          localStorage.setItem("daed_next_token", res.token);
-          closeModal();
-          await loadBootstrap();
-          checkConnectivitySilent();
-        } else {
-          toast(res.error || "密码错误", "error");
+      const uEl = box.querySelector("#lg-u");
+      const pEl = box.querySelector("#lg-p");
+      const goBtn = box.querySelector("#lg-go");
+      const submitLogin = async () => {
+        if (goBtn.disabled) return;
+        goBtn.disabled = true;
+        goBtn.textContent = "登录中…";
+        try {
+          const res = await apiFetch("/api/v1/auth/login", {
+            method: "POST",
+            body: JSON.stringify({
+              username: uEl.value.trim(),
+              password: pEl.value,
+            }),
+          });
+          if (res.ok && res.token) {
+            store.token = res.token;
+            localStorage.setItem("daed_next_token", res.token);
+            closeModal(true);
+            await loadBootstrap();
+            checkConnectivitySilent();
+          } else {
+            toast(res.error || "用户名或密码错误", "error");
+          }
+        } catch (err) {
+          toast("登录失败：" + err.message, "error");
+        } finally {
+          goBtn.disabled = false;
+          goBtn.textContent = "登录面板";
         }
-      });
+      };
+      goBtn?.addEventListener("click", submitLogin);
+      const onEnter = (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          submitLogin();
+        }
+      };
+      uEl?.addEventListener("keydown", onEnter);
+      pEl?.addEventListener("keydown", onEnter);
+      pEl?.focus();
     },
   });
 }
 
-function openModal({ title, bodyHTML, footerHTML, onMount }) {
+function openModal({ title, bodyHTML, footerHTML, onMount, locked = false }) {
+  modalLocked = Boolean(locked);
   document.getElementById("modal-title").textContent = title;
   document.getElementById("modal-body").innerHTML = bodyHTML;
   document.getElementById("modal-footer").innerHTML = footerHTML || "";
+  document.getElementById("modal-close")?.classList.toggle("hidden", modalLocked);
   document.getElementById("modal-overlay").classList.remove("hidden");
   if (onMount) onMount(document.getElementById("modal-box"));
 }
 
-function closeModal() {
+function closeModal(force = false) {
+  if (modalLocked && force !== true) return;
+  modalLocked = false;
   document.getElementById("modal-overlay")?.classList.add("hidden");
 }
 
@@ -3026,83 +3421,3 @@ function splitCSV(str) {
 }
 
 initApp();
-
-function bindGeoUpdates(container) {
-  for (const kind of ["geosite", "geoip"]) {
-    const check = container.querySelector(`#${kind}-check`);
-    const install = container.querySelector(`#${kind}-install`);
-    const status = container.querySelector(`#${kind}-status`);
-    let release;
-    check.onclick = async () => {
-      check.disabled = true;
-      install.classList.add("hidden");
-      status.textContent = "正在检测官方数据库版本…";
-      try {
-        release = await apiFetch(`/api/v1/geodata/update?kind=${kind}`, { timeoutMs: 30000 });
-        if (release.error) throw new Error(release.error);
-        status.textContent = `${release.available ? "可更新" : "已是最新"} · ${release.latest} · 本地 SHA-256 ${release.currentHash ? release.currentHash.slice(0, 12) : "未安装"}`;
-        install.classList.toggle("hidden", !release.available);
-      } catch (err) { status.textContent = "检测失败：" + err.message; }
-      finally { check.disabled = false; }
-    };
-    install.onclick = async () => {
-      if (!release || store.applying) return;
-      if (store.dirty) { toast("请先保存当前编辑，再更新数据库", "error"); return; }
-      store.applying = true;
-      syncApplyControls();
-      check.disabled = install.disabled = true;
-      status.textContent = "正在下载、校验并应用数据库，请稍候…";
-      try {
-        const result = await apiFetch("/api/v1/geodata/update", {
-          method: "POST", timeoutMs: 260000,
-          body: JSON.stringify({ kind, digest: release.digest }),
-        });
-        if (!result.ok) throw new Error(result.error || "更新失败");
-        status.textContent = `${kind}.dat 已更新至 ${release.latest}，运行中的核心已热重载`;
-        install.classList.add("hidden");
-        toast("数据库更新完成", "success");
-      } catch (err) {
-        status.textContent = "更新失败：" + err.message;
-        if (err.unauthorized) openLoginModal();
-      } finally {
-        store.applying = false;
-        syncApplyControls();
-        check.disabled = install.disabled = false;
-      }
-    };
-  }
-}
-
-async function bindGeoSchedule(container) {
- const get = id => container.querySelector(`#geo-schedule-${id}`);
- const status=get("status"), save=get("save");
- let schedule;
- const date = value => value && !value.startsWith("0001-") ? new Date(value).toLocaleString("zh-CN", {timeZone:"Asia/Shanghai",hour12:false}) : "无";
- function show(c) {
-  schedule=c;
-  get("enabled").checked=c.enabled;
-  get("day").value=String(c.weekday);
-  get("time").value=String(c.hour).padStart(2,"0")+":"+String(c.minute).padStart(2,"0");
-  get("mode").value=c.mode;
-  status.textContent=`${c.enabled ? "下次执行："+date(c.nextRun) : "定时更新已关闭"} · 最近执行：${date(c.lastRun)} · ${c.result || "尚未执行"}`;
- }
- try {
-  const c=await apiFetch("/api/v1/geodata/schedule");
-  if(c.error) throw new Error(c.error);
-  show(c);save.disabled=false;
- } catch(err){status.textContent="读取失败："+err.message;}
- save.onclick=async()=>{
-  if(!schedule)return;
-  const parts=get("time").value.split(":").map(Number);
-  if(parts.length!==2){toast("请选择执行时间","error");return;}
-  save.disabled=true;
-  try {
-   const c=await apiFetch("/api/v1/geodata/schedule",{method:"POST",body:JSON.stringify({
-    enabled:get("enabled").checked,weekday:Number(get("day").value),hour:parts[0],minute:parts[1],mode:get("mode").value,revision:schedule.revision
-   })});
-   if(c.error)throw new Error(c.error);
-   show(c);toast("定时设置已保存","success");
-  }catch(err){status.textContent="保存失败："+err.message;}
-  finally{save.disabled=false;}
- };
-}

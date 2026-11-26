@@ -25,7 +25,7 @@ import (
 
 // PanelVersion and DefaultUpdateRepo can be overridden at link time via -ldflags "-X ...".
 var (
-	PanelVersion      = "v1.0.7"
+	PanelVersion      = "v1.0.8"
 	DefaultUpdateRepo = ""
 )
 
@@ -163,7 +163,9 @@ func fetchGitHubRelease(ctx context.Context, rawURL string) (io.ReadCloser, erro
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "DaeStudio/"+PanelVersion)
-	req.Header.Set("Accept", "application/vnd.github+json")
+	if strings.EqualFold(req.URL.Hostname(), "api.github.com") {
+		req.Header.Set("Accept", "application/vnd.github+json")
+	}
 	transport := &http.Transport{
 		Proxy:             nil,
 		ForceAttemptHTTP2: true,

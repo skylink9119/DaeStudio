@@ -69,6 +69,8 @@ type Manager struct {
 	totalTx       int64
 	tickSeq       int64
 	traffic       *nodeTrafficTracker
+	geoMu         sync.Mutex
+	geoUpdating   bool
 }
 
 func NewManager(daeBin, configPath string, forceMock bool) *Manager {
@@ -76,6 +78,7 @@ func NewManager(daeBin, configPath string, forceMock bool) *Manager {
 	if path, err := exec.LookPath(daeBin); err == nil {
 		daeBin = path
 	}
+
 	_, initErr := os.Stat("/etc/init.d/dae")
 	m := &Manager{
 		daeBin:        daeBin,
