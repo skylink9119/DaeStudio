@@ -530,6 +530,12 @@ kbd {
   flex-wrap: wrap;
 }
 
+.panel-head.no-border,
+.panel > .panel-head:last-child {
+  border-bottom: none;
+  padding: 16px 20px;
+}
+
 .panel-foot {
   padding: 10px 20px;
   background: var(--bg-subtle);

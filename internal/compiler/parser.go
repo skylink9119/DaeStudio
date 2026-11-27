@@ -445,10 +445,10 @@ func ParseConfigDAE(cfg string, base model.AppState) (model.AppState, error) {
 			var candDNS model.DNSConfig
 			parseDNSBlock(dnsBody, &candDNS)
 			isUntouchedPlaceholderDNS := len(candDNS.Upstreams) == 1 &&
-				candDNS.Upstreams[0].Tag == "cndns" &&
+				(candDNS.Upstreams[0].Tag == "alidns" || candDNS.Upstreams[0].Tag == "cndns") &&
 				len(candDNS.RequestRules) == 0 &&
 				len(candDNS.ResponseRules) == 0 &&
-				candDNS.RequestFallback == "cndns"
+				candDNS.RequestFallback == candDNS.Upstreams[0].Tag
 			if isUntouchedPlaceholderDNS {
 				st.DNS.Bind = candDNS.Bind
 			} else {

@@ -39,3 +39,32 @@ func TestApplyConfigPreservesOriginalAfterFailedValidation(t *testing.T) {
 		t.Fatal("valid candidate was not atomically installed")
 	}
 }
+
+func TestDynamicDaeBinResolutionAfterDelayedCoreInstall(t *testing.T) {
+	dir := t.TempDir()
+	lateBin := filepath.Join(dir, "dae")
+	cfgPath := filepath.Join(dir, "config.dae")
+
+	// Simulate starting DaeStudio BEFORE dae core is installed (mockMode must stay false!)
+	m := &Manager{
+		daeBin:     lateBin,
+		configPath: cfgPath,
+		mockMode:   false,
+		maxLogs:    50,
+	}
+	if m.IsCoreInstalled() || m.Stats().CoreInstalled || m.Stats().MockMode {
+		t.Fatalf("expected CoreInstalled=false and MockMode=false before binary exists, got %+v", m.Stats())
+	}
+
+	// Now install fake dae binary WITHOUT restarting Manager
+	if err := os.WriteFile(lateBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !m.IsCoreInstalled() || !m.Stats().CoreInstalled {
+		t.Fatal("expected Manager to dynamically detect newly installed dae binary without restart")
+	}
+	const cfg = "global {\n  log_level: warn\n}\nrouting {\n  fallback: direct\n}\n"
+	if ok, msg := m.Validate(cfg); !ok {
+		t.Fatalf("expected Validate to succeed once dae binary appears: %s", msg)
+	}
+}

@@ -10,13 +10,14 @@ export const store = {
   theme: localStorage.getItem("daed_next_theme") || "dark",
 
   state: null,
-  panelVersion: "v1.0.10",
+  panelVersion: "v2.0.0",
   updateRepo: "",
   geoDataStatus: null,
   geoUpdating: false,
   configDae: "",
   stats: {
     running: false,
+    coreInstalled: true,
     mockMode: false,
     pid: 0,
     uptimeSeconds: 0,
@@ -45,8 +46,12 @@ export const store = {
 const IF_MATCH_ENDPOINTS = new Set([
   "/api/v1/state",
   "/api/v1/auth/update",
+  "/api/v1/core/update",
   "/api/v1/panel/repo",
+  "/api/v1/panel/update",
   "/api/v1/geodata/config",
+  "/api/v1/settings/reset",
+  "/api/v1/service/action",
   "/api/v1/config/import",
   "/api/v1/snapshots",
   "/api/v1/snapshots/delete",
@@ -158,18 +163,18 @@ export function regionLabel(region) {
 
 export function latencyTagHTML(ms) {
   if (ms === -1 || ms === undefined || ms === null) {
-    return `<span title="仅测节点入口 TCP 建连，不代表代理实际延迟；TCP 可连接不代表代理可用" class="tag mono">—</span>`;
+    return `<span class="tag mono">—</span>`;
   }
   if (ms === 0) {
-    return `<span title="仅测节点入口 TCP 建连，不代表代理实际延迟；TCP 可连接不代表代理可用" class="tag tag-err mono">超时</span>`;
+    return `<span class="tag tag-err mono">超时</span>`;
   }
   if (ms < 120) {
-    return `<span title="仅测节点入口 TCP 建连，不代表代理实际延迟；TCP 可连接不代表代理可用" class="tag tag-ok mono">${ms} ms</span>`;
+    return `<span class="tag tag-ok mono">${ms} ms</span>`;
   }
   if (ms < 260) {
-    return `<span title="仅测节点入口 TCP 建连，不代表代理实际延迟；TCP 可连接不代表代理可用" class="tag tag-warn mono">${ms} ms</span>`;
+    return `<span class="tag tag-warn mono">${ms} ms</span>`;
   }
-  return `<span title="仅测节点入口 TCP 建连，不代表代理实际延迟；TCP 可连接不代表代理可用" class="tag tag-err mono">${ms} ms</span>`;
+  return `<span class="tag tag-err mono">${ms} ms</span>`;
 }
 
 export function escapeHTML(str) {

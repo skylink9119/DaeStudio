@@ -421,6 +421,28 @@ routing {
 	if string(diskCfgB) != brokenCfg {
 		t.Fatal("first boot fallback must NOT overwrite user's pre-existing config.dae")
 	}
+
+	// Case C: First boot with unconfigured stock OpenWrt config.dae (0 nodes + example.com placeholder)
+	// must preserve original in Snapshots AND load DaeStudio's full ProductionDefaults()!
+	dirC := t.TempDir()
+	cfgPathC := filepath.Join(dirC, "config.dae")
+	statePathC := filepath.Join(dirC, "state.json")
+	stockCfg := "global {\n  log_level: info\n}\nsubscription {\n  my_sub: 'https://www.example.com/subscription/link'\n}\nrouting {\n  fallback: direct\n}\n"
+	if err := os.WriteFile(cfgPathC, []byte(stockCfg), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mgrC := daemon.NewManager("dae-nonexistent", cfgPathC, true)
+	srvC := NewServer(statePathC, "dae-nonexistent", false, mgrC, fstest.MapFS{})
+	if srvC.InitError() != nil {
+		t.Fatalf("unexpected init error on stock config: %v", srvC.InitError())
+	}
+	if len(srvC.state.Groups) != 2 || srvC.state.Routing.Fallback != "proxy" || len(srvC.state.Subscriptions) != 0 {
+		t.Fatalf("expected stock unconfigured config.dae to initialize ProductionDefaults(), got groups=%d subs=%d fb=%q",
+			len(srvC.state.Groups), len(srvC.state.Subscriptions), srvC.state.Routing.Fallback)
+	}
+	if len(srvC.state.Snapshots) != 1 || srvC.state.Snapshots[0].ConfigDAE != stockCfg {
+		t.Fatalf("expected original stock config.dae backed up in Snapshots, got %+v", srvC.state.Snapshots)
+	}
 }
 
 func TestPanelVersionAndUpdateRepoAndAuthGate(t *testing.T) {

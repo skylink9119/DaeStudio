@@ -15,6 +15,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"daed-next/internal/model"
 )
 
 const releaseAPI = "https://api.github.com/repos/daeuniverse/dae/releases/latest"
@@ -24,6 +26,7 @@ const coreMaxSize = 96 << 20
 var stableCoreVersion = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
 type CoreRelease struct {
+	Installed   bool   `json:"installed"`
 	Current     string `json:"current"`
 	Latest      string `json:"latest"`
 	URL         string `json:"url"`
@@ -33,15 +36,35 @@ type CoreRelease struct {
 	digest      string
 }
 
+func (m *Manager) targetInstallDaeBin() (string, bool) {
+	if binPath, found := m.resolveDaeBin(); found {
+		return binPath, true
+	}
+	m.mu.Lock()
+	configured := strings.TrimSpace(m.daeBin)
+	m.mu.Unlock()
+	if configured == "" || configured == "dae" || configured == "/usr/bin/dae" {
+		return "/usr/bin/dae", false
+	}
+	if configured == "/usr/local/bin/dae" {
+		return "/usr/local/bin/dae", false
+	}
+	return configured, false
+}
+
 func (m *Manager) CheckCore(ctx context.Context) (CoreRelease, error) {
-	out, err := runCommand(5*time.Second, m.daeBin, "--version")
-	if err != nil {
-		return CoreRelease{}, fmt.Errorf("读取 dae 版本失败: %w", err)
+	targetBin, found := m.targetInstallDaeBin()
+	current := "未安装"
+	if found {
+		out, err := runCommand(5*time.Second, targetBin, "--version")
+		if err != nil {
+			return CoreRelease{}, fmt.Errorf("读取 dae 版本失败: %w", err)
+		}
+		if _, err := fmt.Sscanf(string(out), "dae version %s", &current); err != nil {
+			return CoreRelease{}, fmt.Errorf("无法识别当前 dae 版本")
+		}
 	}
-	var current string
-	if _, err := fmt.Sscanf(string(out), "dae version %s", &current); err != nil {
-		return CoreRelease{}, fmt.Errorf("无法识别当前 dae 版本")
-	}
+
 	var release struct {
 		Tag    string `json:"tag_name"`
 		Assets []struct {
@@ -62,9 +85,17 @@ func (m *Manager) CheckCore(ctx context.Context) (CoreRelease, error) {
 	if !stableCoreVersion.MatchString(release.Tag) {
 		return CoreRelease{}, fmt.Errorf("无法识别官方稳定版版本号")
 	}
+
 	base := "https://github.com/daeuniverse/dae/releases/"
-	result := CoreRelease{Current: current, Latest: release.Tag, URL: base + "tag/" + release.Tag}
-	if stableCoreVersion.MatchString(current) {
+	result := CoreRelease{
+		Installed: found,
+		Current:   current,
+		Latest:    release.Tag,
+		URL:       base + "tag/" + release.Tag,
+	}
+	if !found {
+		result.Available = true
+	} else if stableCoreVersion.MatchString(current) {
 		var a, b [3]int
 		fmt.Sscanf(current, "v%d.%d.%d", &a[0], &a[1], &a[2])
 		fmt.Sscanf(release.Tag, "v%d.%d.%d", &b[0], &b[1], &b[2])
@@ -75,6 +106,7 @@ func (m *Manager) CheckCore(ctx context.Context) (CoreRelease, error) {
 			}
 		}
 	}
+
 	assetName := coreAssetName()
 	for _, asset := range release.Assets {
 		if asset.Name == assetName && strings.HasPrefix(asset.Digest, "sha256:") {
@@ -86,9 +118,10 @@ func (m *Manager) CheckCore(ctx context.Context) (CoreRelease, error) {
 			break
 		}
 	}
-	_, initErr := os.Stat(daemonInit)
+
+	allowedPath := targetBin == "/usr/bin/dae" || targetBin == "/usr/local/bin/dae"
 	result.Installable = result.Available && result.assetURL != "" && !m.mockMode &&
-		m.daeBin == "/usr/bin/dae" && initErr == nil && !isPackagedCore()
+		allowedPath && (!found || !isPackagedCore())
 	return result, nil
 }
 
@@ -116,9 +149,15 @@ func (m *Manager) InstallCore(ctx context.Context, version string) error {
 	if err != nil {
 		return err
 	}
-	if !release.Installable || version != release.Latest {
+	if !release.Installable || (version != "" && version != release.Latest) {
 		return fmt.Errorf("该版本当前不可安装，请重新检查")
 	}
+	targetVersion := release.Latest
+	targetBin, hadPrevious := m.targetInstallDaeBin()
+	if err := os.MkdirAll(filepath.Dir(targetBin), 0o755); err != nil {
+		return err
+	}
+
 	// Stage the compressed archive in RAM (/tmp) so flash storage on embedded routers is not exhausted.
 	dlDir, err := os.MkdirTemp("", "daestudio-core-dl-*")
 	if err != nil {
@@ -126,7 +165,7 @@ func (m *Manager) InstallCore(ctx context.Context, version string) error {
 	}
 	defer os.RemoveAll(dlDir)
 
-	dir, err := os.MkdirTemp(filepath.Dir(m.daeBin), ".daestudio-core-")
+	dir, err := os.MkdirTemp(filepath.Dir(targetBin), ".daestudio-core-")
 	if err != nil {
 		return err
 	}
@@ -138,53 +177,131 @@ func (m *Manager) InstallCore(ctx context.Context, version string) error {
 	out, err := runCommand(8*time.Second, candidate, "--version")
 	var installedVersion string
 	fmt.Sscanf(string(out), "dae version %s", &installedVersion)
-	if err != nil || installedVersion != version {
+	if err != nil || installedVersion != targetVersion {
 		return fmt.Errorf("下载的内核无法运行或版本不符")
 	}
-	if _, err := runCommand(30*time.Second, candidate, "validate", "-c", m.configPath); err != nil {
-		return fmt.Errorf("新版内核未通过现有配置校验: %w", err)
+
+	// Ensure geoip.dat and geosite.dat exist before running `dae validate -c config.dae` on fresh installs!
+	geoSt := m.InspectGeoData(model.DefaultGeoDataConfig())
+	if !geoSt.GeoIP.Exists || !geoSt.GeoSite.Exists {
+		m.appendLog("info", "检测到缺失 GeoIP / GeoSite 分流数据库，正在自动下载补齐…")
+		if _, geoErr := m.UpdateGeoData(ctx, model.DefaultGeoDataConfig(), "all"); geoErr != nil {
+			return fmt.Errorf("自动补齐 geoip.dat / geosite.dat 失败: %w", geoErr)
+		}
+	}
+
+	if _, cfgErr := os.Stat(m.configPath); cfgErr == nil {
+		if valOut, valErr := runCommand(30*time.Second, candidate, "validate", "-c", m.configPath); valErr != nil {
+			return fmt.Errorf("新版内核未通过现有配置校验: %w %s", valErr, strings.TrimSpace(string(valOut)))
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	previous, err := os.Open(m.daeBin)
-	if err != nil {
-		return err
+	backup := targetBin + ".daestudio-previous"
+	if hadPrevious {
+		previous, openErr := os.Open(targetBin)
+		if openErr != nil {
+			return openErr
+		}
+		backupStage := filepath.Join(dir, "previous")
+		writeErr := writeCoreFile(backupStage, previous, 0o755)
+		previous.Close()
+		if writeErr != nil {
+			return writeErr
+		}
+		if err := os.Rename(backupStage, backup); err != nil {
+			return err
+		}
 	}
-	defer previous.Close()
-	backup := m.daeBin + ".daestudio-previous"
-	backupStage := filepath.Join(dir, "previous")
-	if err := writeCoreFile(backupStage, previous, 0o755); err != nil {
-		return err
-	}
-	if err := os.Rename(backupStage, backup); err != nil {
-		return err
-	}
+
 	wasRunning := detectDaePID() > 0
-	if err := os.Rename(candidate, m.daeBin); err != nil {
+	if err := os.Rename(candidate, targetBin); err != nil {
 		return err
 	}
+	m.mu.Lock()
+	m.daeBin = targetBin
+	m.mu.Unlock()
+
+	if svcErr := m.EnsureServiceScripts(targetBin); svcErr != nil {
+		m.appendLog("warn", svcErr.Error())
+	}
+
 	if !wasRunning {
+		m.appendLog("info", fmt.Sprintf("已安装 dae %s 至 %s", targetVersion, targetBin))
 		return nil
 	}
-	if err := m.restartUpdatedCore(); err != nil {
-		if rollbackErr := os.Rename(backup, m.daeBin); rollbackErr != nil {
-			return fmt.Errorf("新版启动失败，恢复旧文件失败: %w", rollbackErr)
+	if err := m.restartUpdatedCore(targetBin); err != nil {
+		if hadPrevious {
+			if rollbackErr := os.Rename(backup, targetBin); rollbackErr != nil {
+				return fmt.Errorf("新版启动失败，恢复旧文件失败: %w", rollbackErr)
+			}
+			if rollbackErr := m.restartUpdatedCore(targetBin); rollbackErr != nil {
+				return fmt.Errorf("已恢复旧文件，服务启动失败: %w", rollbackErr)
+			}
+			return fmt.Errorf("新版启动失败，已恢复旧内核: %w", err)
 		}
-		if rollbackErr := m.restartUpdatedCore(); rollbackErr != nil {
-			return fmt.Errorf("已恢复旧文件，服务启动失败: %w", rollbackErr)
+		return fmt.Errorf("内核启动失败: %w", err)
+	}
+	m.appendLog("info", fmt.Sprintf("已升级并重启 dae %s", targetVersion))
+	return nil
+}
+
+// BootstrapEnvironment ensures service scripts, dae core binary, and geoip.dat/geosite.dat are all ready.
+// Invoked by `daed-next -bootstrap-env` during package installation.
+func (m *Manager) BootstrapEnvironment(ctx context.Context) error {
+	if m.mockMode || runtime.GOOS != "linux" {
+		return nil
+	}
+	targetBin, found := m.targetInstallDaeBin()
+	if err := m.EnsureServiceScripts(targetBin); err != nil {
+		fmt.Printf("[自检] 提示: %v\n", err)
+	}
+	if !found {
+		fmt.Printf("[自检] 未检测到 %s 内核，正在从官方仓库下载稳定版 dae 内核...\n", targetBin)
+		rel, err := m.CheckCore(ctx)
+		if err != nil {
+			return fmt.Errorf("查询官方 dae 发行版失败: %w", err)
 		}
-		return fmt.Errorf("新版启动失败，已恢复旧内核: %w", err)
+		if !rel.Installable {
+			return fmt.Errorf("当前架构暂不支持自动下载 dae 内核")
+		}
+		if err := m.InstallCore(ctx, rel.Latest); err != nil {
+			return err
+		}
+		fmt.Printf("[自检] 已成功安装 dae %s -> %s\n", rel.Latest, targetBin)
+	} else {
+		fmt.Printf("[自检] 已检测到 dae 内核 (%s)\n", targetBin)
+	}
+
+	geoSt := m.InspectGeoData(model.DefaultGeoDataConfig())
+	if !geoSt.GeoIP.Exists || !geoSt.GeoSite.Exists {
+		fmt.Printf("[自检] 正在自动下载并校验 geoip.dat / geosite.dat 分流数据库...\n")
+		if _, err := m.UpdateGeoData(ctx, model.DefaultGeoDataConfig(), "all"); err != nil {
+			return fmt.Errorf("下载分流数据库失败: %w", err)
+		}
+		fmt.Printf("[自检] geoip.dat / geosite.dat 分流数据库已就绪\n")
+	} else {
+		fmt.Printf("[自检] 分流数据库已就绪 (%s)\n", geoSt.Dir)
 	}
 	return nil
 }
 
-func (m *Manager) restartUpdatedCore() error {
-	if _, err := runCommand(15*time.Second, daemonInit, "restart"); err != nil {
-		return err
+func (m *Manager) restartUpdatedCore(targetBin string) error {
+	if _, err := os.Stat(daemonInit); err == nil {
+		if _, err := runCommand(15*time.Second, daemonInit, "restart"); err != nil {
+			return err
+		}
+	} else if !isOpenWrtHost() && hasSystemdDaeUnit() {
+		if _, err := runCommand(15*time.Second, "systemctl", "restart", "dae"); err != nil {
+			return err
+		}
+	} else {
+		return fmt.Errorf("未检测到系统服务管理脚本")
 	}
-	target, err := os.Stat(m.daeBin)
+
+	target, err := os.Stat(targetBin)
 	if err != nil {
 		return err
 	}

@@ -3,7 +3,6 @@ package compiler
 import (
 	"fmt"
 	"net"
-	"net/url"
 	"regexp"
 	"strings"
 
@@ -225,22 +224,15 @@ func runtimeState(st model.AppState) model.AppState {
 	st.Groups = nil
 	st.Routing = model.RoutingConfig{Mode: "visual", Fallback: "direct"}
 	st.DNS = model.DNSConfig{
-		Mode: "visual", Bind: st.DNS.Bind,
-		Upstreams:       []model.DNSUpstream{{Tag: "cndns", URL: "https://223.5.5.5/dns-query"}},
-		RequestFallback: "cndns", ResponseFallback: "accept",
+		Mode: "visual", Bind: st.DNS.Bind, IpVersionPrefer: st.DNS.IpVersionPrefer,
+		Upstreams:       []model.DNSUpstream{{Tag: "alidns", URL: "udp://223.5.5.5:53"}},
+		RequestFallback: "alidns", ResponseFallback: "accept",
 	}
 	return st
 }
 
 func ValidateOutbounds(st model.AppState) error {
 	nodes := EnabledNodes(st)
-	for _, node := range nodes {
-		u, err := url.Parse(strings.TrimSpace(node.URI))
-		if err == nil && u.Scheme == "vless" && u.Query().Get("security") == "reality" && strings.TrimSpace(u.Query().Get("pbk")) == "" {
-			return fmt.Errorf("Reality 节点缺少公钥 pbk，请重新导入完整节点链接")
-		}
-	}
-
 	builtinOutbounds := map[string]bool{
 		"direct":      true,
 		"must_direct": true,
@@ -348,6 +340,9 @@ func renderGroupFilter(group model.Group, nodes []model.Node, aliases []string) 
 	matchedIdxs := matchNodeIndicesForGroup(group, nodes)
 	if len(matchedIdxs) == 0 {
 		return []string{"filter: name(regex: '^$')"}
+	}
+	if len(matchedIdxs) == len(nodes) {
+		return nil
 	}
 	tags := make([]string, 0, len(matchedIdxs))
 	for _, idx := range matchedIdxs {
@@ -472,27 +467,14 @@ func RenderConfig(st model.AppState) string {
 	// 3. Node Block (all enabled manual + subscription nodes with unique tags)
 	b.WriteString("node {\n")
 	for i, n := range activeNodes {
-		fmt.Fprintf(&b, "    %s: '%s'\n", aliases[i], escapeSingleQuote(runtimeNodeURI(n.URI)))
+		fmt.Fprintf(&b, "    %s: '%s'\n", aliases[i], escapeSingleQuote(strings.TrimSpace(n.URI)))
 	}
 	b.WriteString("}\n\n")
 
 	// 4. DNS Block
 	b.WriteString("dns {\n")
 	if st.DNS.Mode == "dsl" && strings.TrimSpace(st.DNS.RawDSL) != "" {
-		rawDNS := stripGeneratedNodeDNS(strings.TrimSpace(unwrapBlockBody(st.DNS.RawDSL, "dns")))
-		directDNSTag := pickDirectDNSTag(ParseDNSDSL(rawDNS))
-		if len(nodeDomains) > 0 && directDNSTag != "" {
-			fullList := make([]string, len(nodeDomains))
-			for i, domain := range nodeDomains {
-				fullList[i] = "full:" + domain
-			}
-			requestBlock := regexp.MustCompile(`(?m)^\s*request\s*\{`)
-			if loc := requestBlock.FindStringIndex(rawDNS); loc != nil {
-				rule := fmt.Sprintf("\n        # [Auto:NodeDomains] 代理节点入口域名走直连 DNS 解析（防死锁）\n        qname(%s) -> %s", strings.Join(fullList, ", "), directDNSTag)
-				rawDNS = rawDNS[:loc[1]] + rule + rawDNS[loc[1]:]
-			}
-		}
-		for _, line := range strings.Split(rawDNS, "\n") {
+		for _, line := range strings.Split(strings.TrimSpace(unwrapBlockBody(st.DNS.RawDSL, "dns")), "\n") {
 			b.WriteString("    " + line + "\n")
 		}
 	} else {
@@ -716,42 +698,4 @@ func sanitizeIdentifier(s string) string {
 		}
 	}
 	return out.String()
-}
-
-// stripGeneratedNodeDNS removes only explicitly marked generated DNS rules.
-// User-authored hostname rules must remain untouched.
-func stripGeneratedNodeDNS(raw string) string {
-	lines := strings.Split(raw, "\n")
-	out := make([]string, 0, len(lines))
-	for i := 0; i < len(lines); i++ {
-		t := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(t, "#") && isAutoNodeDomainComment(strings.TrimPrefix(t, "#")) {
-			j := i + 1
-			for j < len(lines) && strings.TrimSpace(lines[j]) == "" {
-				j++
-			}
-			if j < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[j]), "qname(") && strings.Contains(lines[j], "->") {
-				i = j
-				continue
-			}
-		}
-		out = append(out, lines[i])
-	}
-	return strings.Join(out, "\n")
-}
-
-// dae requires an explicit Reality fingerprint even when a client link omits it.
-func runtimeNodeURI(raw string) string {
-	raw = strings.TrimSpace(raw)
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "vless" {
-		return raw
-	}
-	q := u.Query()
-	if q.Get("security") != "reality" || strings.TrimSpace(q.Get("fp")) != "" {
-		return raw
-	}
-	q.Set("fp", "chrome")
-	u.RawQuery = q.Encode()
-	return u.String()
 }

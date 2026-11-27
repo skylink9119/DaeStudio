@@ -4,14 +4,14 @@
     "lanInterfaces": [
       "br-lan"
     ],
-    "dialMode": "domain++",
+    "dialMode": "domain+",
     "logLevel": "warn",
     "tproxyPort": 12345,
     "tproxyPortProtect": true,
     "soMarkFromDae": 0,
     "allowInsecure": false,
     "autoConfigKernelParameter": true,
-    "checkInterval": "60s",
+    "checkInterval": "30s",
     "checkTolerance": "50ms",
     "tcpCheckUrl": "http://cp.cloudflare.com,1.1.1.1,2606:4700:4700::1111",
     "tcpCheckHttpMethod": "HEAD",
@@ -35,30 +35,37 @@
       {
         "tag": "cfdns",
         "url": "tcp://1.1.1.1:53",
-        "note": "Cloudflare 海外无污染 TCP DNS（经代理隧道加密查询，免二次 TLS 握手）"
+        "note": "Cloudflare 海外无污染 TCP DNS（经代理隧道加密查询）"
       }
     ],
     "requestRules": [
       {
-        "id": "opt-dns-private",
+        "id": "default-dns-1",
         "enabled": true,
         "expr": "qname(geosite:private)",
         "target": "alidns",
-        "comment": "局域网与私有域名不走代理隧道"
+        "comment": "局域网与私有域名直连解析"
       },
       {
-        "id": "opt-dns-google-cn",
+        "id": "default-dns-2",
+        "enabled": false,
+        "expr": "qname(geosite:category-ads-all)",
+        "target": "reject",
+        "comment": "广告与追踪域名拦截（按需开启）"
+      },
+      {
+        "id": "default-dns-3",
         "enabled": true,
         "expr": "qname(suffix:googleapis.cn, suffix:xn--ngstr-lra8j.com)",
         "target": "cfdns",
-        "comment": "Google CN 特例域名走海外无污染解析（优先于 geosite:cn）"
+        "comment": "Google CN 特例域名走海外无污染解析"
       },
       {
-        "id": "opt-dns-cn",
+        "id": "default-dns-4",
         "enabled": true,
         "expr": "qname(geosite:cn)",
         "target": "alidns",
-        "comment": "国内网站与 App 域名直连解析（已含 Apple/微软/Steam 国内 CDN）"
+        "comment": "国内网站与 App 域名直连解析（含 Apple/微软/Steam 国内 CDN）"
       }
     ],
     "requestFallback": "cfdns",
@@ -70,38 +77,24 @@
     "mode": "visual",
     "rules": [
       {
-        "id": "opt-rt-1",
+        "id": "default-route-1",
         "enabled": true,
-        "name": "系统网络核心进程强制直连（防回环）",
+        "name": "系统网络与拨号校时进程强制直连",
         "category": "system",
         "conditions": [
           {
             "negate": false,
             "field": "pname",
-            "value": "NetworkManager, systemd-resolved, dnsmasq, netifd, odhcp6c, pppd, ntpd, chronyd"
+            "value": "NetworkManager, netifd, odhcp6c, pppd, ntpd, chronyd"
           }
         ],
         "outbound": "must_direct"
       },
       {
-        "id": "opt-rt-2",
-        "enabled": true,
-        "name": "国内公共 DNS 上游强制直连（免嗅探开销）",
-        "category": "system",
-        "conditions": [
-          {
-            "negate": false,
-            "field": "dip",
-            "value": "223.5.5.5, 223.6.6.6, 119.29.29.29"
-          }
-        ],
-        "outbound": "must_direct"
-      },
-      {
-        "id": "opt-rt-3",
+        "id": "default-route-2",
         "enabled": true,
         "name": "NTP 时间同步直连",
-        "category": "system",
+        "category": "direct",
         "conditions": [
           {
             "negate": false,
@@ -117,7 +110,7 @@
         "outbound": "must_direct"
       },
       {
-        "id": "opt-rt-4",
+        "id": "default-route-3",
         "enabled": true,
         "name": "局域网、私有网段与组播广播直连",
         "category": "direct",
@@ -131,7 +124,7 @@
         "outbound": "direct"
       },
       {
-        "id": "opt-rt-5",
+        "id": "default-route-4",
         "enabled": true,
         "name": "局域网私有域名直连",
         "category": "direct",
@@ -145,9 +138,23 @@
         "outbound": "direct"
       },
       {
-        "id": "opt-rt-6",
+        "id": "default-route-5",
+        "enabled": false,
+        "name": "广告连接拦截（按需开启）",
+        "category": "block",
+        "conditions": [
+          {
+            "negate": false,
+            "field": "domain",
+            "value": "geosite:category-ads-all"
+          }
+        ],
+        "outbound": "block"
+      },
+      {
+        "id": "default-route-6",
         "enabled": true,
-        "name": "Google CN 与安卓推送服务走代理（优先于国内域名）",
+        "name": "Google CN 与安卓推送服务优先走代理",
         "category": "custom",
         "conditions": [
           {
@@ -159,7 +166,21 @@
         "outbound": "proxy"
       },
       {
-        "id": "opt-rt-7",
+        "id": "default-route-7",
+        "enabled": true,
+        "name": "国际流媒体走流媒体策略组",
+        "category": "media",
+        "conditions": [
+          {
+            "negate": false,
+            "field": "domain",
+            "value": "suffix:youtube.com, suffix:youtu.be, suffix:googlevideo.com, suffix:ytimg.com, suffix:youtubei.googleapis.com, suffix:netflix.com, suffix:nflxvideo.net, suffix:disneyplus.com, suffix:spotify.com"
+          }
+        ],
+        "outbound": "streaming"
+      },
+      {
+        "id": "default-route-8",
         "enabled": true,
         "name": "国内网站与 App 域名直连（含 Apple / 微软 / Steam 国内 CDN）",
         "category": "direct",
@@ -173,9 +194,9 @@
         "outbound": "direct"
       },
       {
-        "id": "opt-rt-8",
+        "id": "default-route-9",
         "enabled": true,
-        "name": "海外知名网站与国际 App 域名优先代理（防污染缓存 IP 误走直连）",
+        "name": "海外知名网站与国际 App 域名优先代理（防污染缓存 IP 误直连）",
         "category": "custom",
         "conditions": [
           {
@@ -187,7 +208,7 @@
         "outbound": "proxy"
       },
       {
-        "id": "opt-rt-9",
+        "id": "default-route-10",
         "enabled": true,
         "name": "国内目标 IP 直连（兜底微信通话 / 国内手游 / 纯 IP 流量）",
         "category": "direct",

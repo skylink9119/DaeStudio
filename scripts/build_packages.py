@@ -8,6 +8,7 @@ Builds clean, zero-xattr multi-format Linux / OpenWrt / iStoreOS / Debian instal
 """
 
 import gzip
+import hashlib
 import io
 import os
 import stat
@@ -16,31 +17,8 @@ import time
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST_DIR = os.path.join(ROOT_DIR, "dist")
-VERSION = os.environ.get("DAED_NEXT_VERSION", "1.0.10")
+VERSION = os.environ.get("DAED_NEXT_VERSION", "2.0.0")
 MTIME = int(time.time())
-
-
-CORE_DIR = os.path.join(DIST_DIR, "core")
-
-
-def core_files(arch):
-    names = [f"dae-linux-{arch}", "geoip.dat", "geosite.dat",
-             "DAE-LICENSE", "CORE-NOTICE.txt", "dae-source.tar.gz", "dae-core.json"]
-    return {name: (open(os.path.join(CORE_DIR, name), "rb").read(),
-                   0o755 if name.startswith("dae-linux-") else 0o644) for name in names}
-
-
-def core_package_entries(arch):
-    entries = []
-    for name, (data, mode) in core_files(arch).items():
-        if name.startswith("dae-linux-"):
-            target = "usr/bin/dae"
-        elif name.endswith(".dat"):
-            target = "usr/share/dae/" + name
-        else:
-            target = "usr/share/doc/daed-next/" + name
-        entries.append((target, data, mode))
-    return entries
 
 
 def _tar_bytes(entries: list[tuple[str, bytes, int]], fmt=tarfile.USTAR_FORMAT) -> bytes:
@@ -83,10 +61,6 @@ def _tar_bytes(entries: list[tuple[str, bytes, int]], fmt=tarfile.USTAR_FORMAT) 
 
 
 def _bundle_tar_gz(out_path: str, files: dict[str, tuple[bytes, int]]) -> None:
-    files = dict(files)
-    for arch in ("amd64", "386", "arm64"):
-        if f"daed-next-linux-{arch}" in files:
-            files.update(core_files(arch))
     raw_buf = io.BytesIO()
     with tarfile.open(fileobj=raw_buf, mode="w", format=tarfile.USTAR_FORMAT) as tf:
         di = tarfile.TarInfo(name="daed-next-install")
@@ -177,8 +151,6 @@ start_service() {
         ("usr/share/rpcd/acl.d/luci-app-daed-next.json", acl_bytes, 0o644),
         ("www/luci-static/resources/view/daed-next/main.js", view_bytes, 0o644),
     ]
-    # Include the matching official core and routing databases.
-    data_entries.extend(core_package_entries({"x86_64": "amd64", "i386_pentium4": "386", "all": "arm64"}[pkg_arch]))
     data_tgz = _tar_bytes(data_entries)
     installed_size = sum(len(x[1]) for x in data_entries)
 
@@ -186,7 +158,7 @@ start_service() {
         f"Package: luci-app-daed-next\n"
         f"Version: {VERSION}-1\n"
         f"Depends: libc\n"
-        f"License: MIT AND AGPL-3.0-only\n"
+        f"License: MIT\n"
         f"Section: luci\n"
         f"Architecture: {pkg_arch}\n"
         f"Installed-Size: {installed_size}\n"
@@ -196,16 +168,70 @@ start_service() {
 
     postinst = b"""#!/bin/sh
 [ -n "${IPKG_INSTROOT}" ] && exit 0
-/usr/bin/dae --version >/dev/null || exit 1
-mkdir -p /etc/dae/daed-next
+mkdir -p /etc/dae/daed-next /usr/share/dae /var/log/dae
 if [ -f /etc/dae/config.dae ] && [ ! -f /etc/dae/config.dae.orig_bak ]; then
     cp -p /etc/dae/config.dae /etc/dae/config.dae.orig_bak
     chmod 0600 /etc/dae/config.dae.orig_bak
 fi
+if [ ! -f /etc/init.d/dae ]; then
+    cat << 'DAEINITEOF' > /etc/init.d/dae
+#!/bin/sh /etc/rc.common
+START=99
+STOP=10
+USE_PROCD=1
+
+PROG="/usr/bin/dae"
+
+start_service() {
+    config_load "dae"
+    local enabled config_file log_maxbackups log_maxsize
+    config_get_bool enabled "config" "enabled" "1"
+    [ "$enabled" -eq "1" ] || return 0
+    config_get config_file "config" "config_file" "/etc/dae/config.dae"
+    config_get log_maxbackups "config" "log_maxbackups" "1"
+    config_get log_maxsize "config" "log_maxsize" "5"
+
+    [ -x "$PROG" ] || return 1
+    [ -f "$config_file" ] || return 1
+    mkdir -p /var/log/dae
+    chmod 0600 "$config_file" 2>/dev/null || true
+
+    procd_open_instance "dae"
+    procd_set_param command "$PROG" run -c "$config_file" --logfile /var/log/dae/dae.log --logfile-maxbackups "$log_maxbackups" --logfile-maxsize "$log_maxsize"
+    procd_set_param limits memlock="unlimited" nofile="1048576 1048576"
+    procd_set_param respawn
+    procd_close_instance
+}
+
+reload_service() {
+    local pid
+    pid="$(pgrep -f "^$PROG run" | head -n1)"
+    if [ -n "$pid" ]; then
+        "$PROG" reload "$pid"
+    else
+        restart
+    fi
+}
+DAEINITEOF
+    chmod 0755 /etc/init.d/dae
+fi
+if [ ! -f /etc/config/dae ] || ! grep -q "config dae 'config'" /etc/config/dae 2>/dev/null; then
+    cat << 'DAECFG' > /etc/config/dae
+config dae 'config'
+	option enabled '1'
+	option config_file '/etc/dae/config.dae'
+	option log_maxbackups '1'
+	option log_maxsize '5'
+DAECFG
+    chmod 0600 /etc/config/dae
+fi
+if [ -x /usr/bin/dae ]; then
+    /etc/init.d/dae enable </dev/null >/dev/null 2>&1 || true
+fi
 chmod 0755 /usr/bin/daed-next /etc/init.d/daed-next
 rm -f /tmp/luci-indexcache*
 rm -rf /tmp/luci-modulecache/*
-/etc/init.d/rpcd reload >/dev/null 2>&1 || true
+/etc/init.d/rpcd reload </dev/null >/dev/null 2>&1 || true
 /etc/init.d/daed-next enable </dev/null >/dev/null 2>&1 || true
 /etc/init.d/daed-next restart </dev/null >/dev/null 2>&1 || true
 exit 0
@@ -283,9 +309,8 @@ WantedBy=multi-user.target
         ("usr/local/bin/daed-next", bin_bytes, 0o755),
         ("lib/systemd/system/daed-next.service", svc_bytes, 0o644),
     ]
-    data_entries.extend(core_package_entries({"amd64": "amd64", "i386": "386", "arm64": "arm64"}[deb_arch]))
     data_tgz = _tar_bytes(data_entries, fmt=tarfile.GNU_FORMAT)
-    installed_kb = max(1, sum(len(entry[1]) for entry in data_entries) // 1024)
+    installed_kb = max(1, (len(bin_bytes) + len(svc_bytes)) // 1024)
 
     control_text = (
         f"Package: daed-next\n"
@@ -300,14 +325,37 @@ WantedBy=multi-user.target
 
     postinst = b"""#!/bin/sh
 set -e
-/usr/bin/dae --version >/dev/null || exit 1
-mkdir -p /etc/dae/daed-next
+mkdir -p /etc/dae/daed-next /usr/share/dae /var/log/dae
 if [ -f /etc/dae/config.dae ] && [ ! -f /etc/dae/config.dae.orig_bak ]; then
     cp -p /etc/dae/config.dae /etc/dae/config.dae.orig_bak
     chmod 0600 /etc/dae/config.dae.orig_bak
 fi
+if [ ! -f /etc/systemd/system/dae.service ] && [ ! -f /lib/systemd/system/dae.service ] && [ ! -f /usr/lib/systemd/system/dae.service ]; then
+    cat << 'DAESVCEOF' > /etc/systemd/system/dae.service
+[Unit]
+Description=dae Transparent Proxy Kernel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/dae run --disable-timestamp -c /etc/dae/config.dae
+ExecReload=/usr/bin/dae reload $MAINPID
+Restart=on-failure
+RestartSec=3s
+LimitNPROC=512
+LimitNOFILE=1048576
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target
+DAESVCEOF
+fi
 if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload >/dev/null 2>&1 || true
+    if [ -x /usr/bin/dae ]; then
+        systemctl enable dae >/dev/null 2>&1 || true
+    fi
     systemctl enable --now daed-next >/dev/null 2>&1 || true
 fi
 exit 0
@@ -448,6 +496,21 @@ def main() -> None:
     if x86_32_bin is not None:
         build_debian_deb(os.path.join(DIST_DIR, f"daed-next_{VERSION}_i386.deb"), x86_32_bin, "i386")
     build_debian_deb(os.path.join(DIST_DIR, f"daed-next_{VERSION}_arm64.deb"), arm64_bin, "arm64")
+
+    # 5. Generate SHA256SUMS for GitHub Releases & online verification
+    sum_lines = []
+    for fname in sorted(os.listdir(DIST_DIR)):
+        if fname == "SHA256SUMS" or fname.startswith("."):
+            continue
+        fpath = os.path.join(DIST_DIR, fname)
+        if os.path.isfile(fpath):
+            h = hashlib.sha256()
+            with open(fpath, "rb") as rf:
+                for chunk in iter(lambda: rf.read(1 << 20), b""):
+                    h.update(chunk)
+            sum_lines.append(f"{h.hexdigest()}  {fname}\n")
+    with open(os.path.join(DIST_DIR, "SHA256SUMS"), "w", encoding="utf-8") as sf:
+        sf.writelines(sum_lines)
 
 
 if __name__ == "__main__":

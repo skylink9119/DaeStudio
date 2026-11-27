@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -86,14 +85,6 @@ func (s *Server) handleGeoDataUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) executeGeoDataUpdate(ctx context.Context, target string) (string, daemon.GeoDataStatus, string, error) {
-	if !s.changeMu.TryLock() {
-		return "", daemon.GeoDataStatus{}, "", fmt.Errorf("另一项配置操作正在执行，请稍后重试")
-	}
-	defer s.changeMu.Unlock()
-	if s.panelRestartPending {
-		return "", daemon.GeoDataStatus{}, "", fmt.Errorf("面板正在重启")
-	}
-
 	s.mu.RLock()
 	cfg := s.state.GeoData
 	s.mu.RUnlock()

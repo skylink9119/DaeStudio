@@ -612,19 +612,21 @@ func (m *Manager) UpdateGeoData(ctx context.Context, cfg model.GeoDataConfig, ta
 	}
 
 	// Preflight compatibility check against current config.dae before touching live files!
-	if _, cfgErr := os.Stat(m.configPath); cfgErr == nil && runtime.GOOS == "linux" {
-		_, hasIP := os.Stat(filepath.Join(stageDir, "geoip.dat"))
-		_, hasSite := os.Stat(filepath.Join(stageDir, "geosite.dat"))
-		if hasIP == nil && hasSite == nil {
-			valCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
-			cmd := exec.CommandContext(valCtx, m.daeBin, "validate", "-c", m.configPath)
-			cmd.Env = append(os.Environ(), "DAE_LOCATION_ASSET="+stageDir)
-			cmd.WaitDelay = 2 * time.Second
-			out, valErr := cmd.CombinedOutput()
-			cancel()
-			if valErr != nil {
-				detail := strings.TrimSpace(string(out))
-				return "", fmt.Errorf("新版规则库与当前配置不兼容，已中止替换: %v %s", valErr, detail)
+	if binPath, coreFound := m.resolveDaeBin(); coreFound && runtime.GOOS == "linux" {
+		if _, cfgErr := os.Stat(m.configPath); cfgErr == nil {
+			_, hasIP := os.Stat(filepath.Join(stageDir, "geoip.dat"))
+			_, hasSite := os.Stat(filepath.Join(stageDir, "geosite.dat"))
+			if hasIP == nil && hasSite == nil {
+				valCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+				cmd := exec.CommandContext(valCtx, binPath, "validate", "-c", m.configPath)
+				cmd.Env = append(os.Environ(), "DAE_LOCATION_ASSET="+stageDir)
+				cmd.WaitDelay = 2 * time.Second
+				out, valErr := cmd.CombinedOutput()
+				cancel()
+				if valErr != nil {
+					detail := strings.TrimSpace(string(out))
+					return "", fmt.Errorf("新版规则库与当前配置不兼容，已中止替换: %v %s", valErr, detail)
+				}
 			}
 		}
 	}

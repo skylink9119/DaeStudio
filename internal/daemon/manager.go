@@ -30,6 +30,7 @@ type LogEntry struct {
 // RuntimeStats holds live service status and traffic telemetry.
 type RuntimeStats struct {
 	Running         bool                       `json:"running"`
+	CoreInstalled   bool                       `json:"coreInstalled"`
 	MockMode        bool                       `json:"mockMode"`
 	PID             int                        `json:"pid"`
 	UptimeSeconds   int64                      `json:"uptimeSeconds"`
@@ -44,12 +45,11 @@ type RuntimeStats struct {
 	EndpointTraffic map[string]EndpointTraffic `json:"endpointTraffic,omitempty"`
 }
 
-// Manager supervises the dae kernel process (integrating natively with OpenWrt procd /etc/init.d/dae when present).
+// Manager supervises the dae kernel process (integrating natively with OpenWrt procd /etc/init.d/dae or systemd).
 type Manager struct {
 	mu             sync.Mutex
 	daeBin         string
 	configPath     string
-	hasInitScript  bool
 	mockMode       bool
 	running        bool
 	pid            int
@@ -74,37 +74,208 @@ type Manager struct {
 }
 
 func NewManager(daeBin, configPath string, forceMock bool) *Manager {
-	isMock := forceMock
-	if path, err := exec.LookPath(daeBin); err == nil {
-		daeBin = path
+	isMock := forceMock || runtime.GOOS != "linux"
+	trimmedBin := strings.TrimSpace(daeBin)
+	if trimmedBin == "" {
+		trimmedBin = "dae"
 	}
-
-	_, initErr := os.Stat("/etc/init.d/dae")
 	m := &Manager{
-		daeBin:        daeBin,
-		configPath:    configPath,
-		hasInitScript: runtime.GOOS == "linux" && initErr == nil,
-		mockMode:      isMock,
-		maxLogs:       400,
-		traffic:       newNodeTrafficTracker(),
+		daeBin:     trimmedBin,
+		configPath: configPath,
+		mockMode:   isMock,
+		maxLogs:    400,
+		traffic:    newNodeTrafficTracker(),
 	}
 	if isMock {
 		m.running = true
 		m.pid = os.Getpid()
 		m.startedAt = time.Now()
 		m.lastReloadedAt = time.Now().Format(time.RFC3339)
-		m.appendLog("info", "DaeStudio 已在模拟内核模式 (Mock Engine) 启动")
+		m.appendLog("info", "DaeStudio 已在本地开发模拟模式启动")
 	} else {
-		if pid := detectDaePID(); pid > 0 {
-			m.running = true
-			m.pid = pid
-			m.startedAt = detectProcStartTime(pid)
-			m.appendLog("info", fmt.Sprintf("检测到运行中的 dae 进程 (PID=%d)，已自动接管监控", pid))
+		if binPath, ok := m.resolveDaeBin(); ok {
+			m.daeBin = binPath
+			_ = m.EnsureServiceScripts(binPath)
+			if pid := detectDaePID(); pid > 0 {
+				m.running = true
+				m.pid = pid
+				m.startedAt = detectProcStartTime(pid)
+				m.appendLog("info", fmt.Sprintf("检测到运行中的 dae 进程 (PID=%d)，已自动接管监控", pid))
+			} else {
+				m.appendLog("info", fmt.Sprintf("DaeStudio 控制面已就绪 (内核路径: %s, 配置: %s)", binPath, configPath))
+			}
 		} else {
-			m.appendLog("info", fmt.Sprintf("DaeStudio 控制面已就绪 (内核路径: %s, 配置: %s)", daeBin, configPath))
+			m.appendLog("warn", fmt.Sprintf("尚未检测到 dae 内核 (%s)，可在面板概览页或「系统与日志」一键下载安装", trimmedBin))
 		}
 	}
 	return m
+}
+
+// resolveDaeBin dynamically locates the dae executable so installing dae after DaeStudio starts
+// works immediately without restarting the panel.
+func (m *Manager) resolveDaeBin() (string, bool) {
+	m.mu.Lock()
+	configured := strings.TrimSpace(m.daeBin)
+	m.mu.Unlock()
+	if configured == "" {
+		configured = "dae"
+	}
+	if path, err := exec.LookPath(configured); err == nil && path != "" {
+		if st, statErr := os.Stat(path); statErr == nil && !st.IsDir() {
+			return path, true
+		}
+	}
+	if configured == "dae" || configured == "/usr/bin/dae" || configured == "/usr/local/bin/dae" {
+		for _, cand := range []string{"/usr/bin/dae", "/usr/local/bin/dae"} {
+			if st, err := os.Stat(cand); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
+				return cand, true
+			}
+		}
+	}
+	return configured, false
+}
+
+// IsCoreInstalled reports whether a usable dae binary is currently present on disk (or mock mode is forced).
+func (m *Manager) IsCoreInstalled() bool {
+	if m.mockMode {
+		return true
+	}
+	_, ok := m.resolveDaeBin()
+	return ok
+}
+
+func isOpenWrtHost() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	if _, err := os.Stat("/etc/openwrt_release"); err == nil {
+		return true
+	}
+	if _, err := os.Stat("/etc/rc.common"); err == nil {
+		return true
+	}
+	return false
+}
+
+func hasSystemdDaeUnit() bool {
+	for _, p := range []string{
+		"/etc/systemd/system/dae.service",
+		"/lib/systemd/system/dae.service",
+		"/usr/lib/systemd/system/dae.service",
+	} {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// EnsureServiceScripts automatically creates missing /etc/init.d/dae + /etc/config/dae on OpenWrt
+// (or /etc/systemd/system/dae.service on systemd Linux) when using standard system binary paths.
+func (m *Manager) EnsureServiceScripts(daeBinPath string) error {
+	if m.mockMode || runtime.GOOS != "linux" {
+		return nil
+	}
+	if daeBinPath != "/usr/bin/dae" && daeBinPath != "/usr/local/bin/dae" {
+		return nil
+	}
+	_ = os.MkdirAll("/usr/share/dae", 0o755)
+	_ = os.MkdirAll("/var/log/dae", 0o755)
+
+	if isOpenWrtHost() {
+		if _, err := os.Stat("/etc/init.d/dae"); os.IsNotExist(err) {
+			initScript := fmt.Sprintf(`#!/bin/sh /etc/rc.common
+START=99
+STOP=10
+USE_PROCD=1
+
+PROG=%q
+
+start_service() {
+	config_load "dae"
+	local enabled config_file log_maxbackups log_maxsize
+	config_get_bool enabled "config" "enabled" "1"
+	[ "$enabled" -eq "1" ] || return 0
+	config_get config_file "config" "config_file" "/etc/dae/config.dae"
+	config_get log_maxbackups "config" "log_maxbackups" "1"
+	config_get log_maxsize "config" "log_maxsize" "5"
+
+	[ -x "$PROG" ] || return 1
+	[ -f "$config_file" ] || return 1
+	mkdir -p /var/log/dae
+	chmod 0600 "$config_file" 2>/dev/null || true
+
+	procd_open_instance "dae"
+	procd_set_param command "$PROG" run -c "$config_file" --logfile /var/log/dae/dae.log --logfile-maxbackups "$log_maxbackups" --logfile-maxsize "$log_maxsize"
+	procd_set_param limits memlock="unlimited" nofile="1048576 1048576"
+	procd_set_param respawn
+	procd_close_instance
+}
+
+reload_service() {
+	local pid
+	pid="$(pgrep -f "^$PROG run" | head -n1)"
+	if [ -n "$pid" ]; then
+		"$PROG" reload "$pid"
+	else
+		restart
+	fi
+}
+`, daeBinPath)
+			if err := writeSyncedFile("/etc/init.d/dae", strings.NewReader(initScript), 0o755, 64<<10); err != nil {
+				return fmt.Errorf("自动创建 /etc/init.d/dae 失败: %w", err)
+			}
+			_, _ = runCommand(5*time.Second, "/etc/init.d/dae", "enable")
+			m.appendLog("info", "已自动补齐 OpenWrt /etc/init.d/dae 自启服务脚本")
+		}
+
+		uciBytes, readErr := os.ReadFile("/etc/config/dae")
+		if readErr != nil || !strings.Contains(string(uciBytes), "config dae 'config'") {
+			uciCfg := fmt.Sprintf("config dae 'config'\n\toption enabled '1'\n\toption config_file '%s'\n\toption log_maxbackups '1'\n\toption log_maxsize '5'\n", m.configPath)
+			if err := WritePrivateFile("/etc/config/dae", []byte(uciCfg)); err != nil {
+				return fmt.Errorf("自动创建 /etc/config/dae 失败: %w", err)
+			}
+		}
+		return nil
+	}
+
+	if !hasSystemdDaeUnit() {
+		if _, err := exec.LookPath("systemctl"); err == nil {
+			unit := fmt.Sprintf(`[Unit]
+Description=dae Transparent Proxy Kernel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=%s run --disable-timestamp -c %s
+ExecReload=%s reload $MAINPID
+Restart=on-failure
+RestartSec=3s
+LimitNPROC=512
+LimitNOFILE=1048576
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target
+`, daeBinPath, m.configPath, daeBinPath)
+			if err := WritePublicFile("/etc/systemd/system/dae.service", []byte(unit)); err == nil {
+				_, _ = runCommand(8*time.Second, "systemctl", "daemon-reload")
+				_, _ = runCommand(8*time.Second, "systemctl", "enable", "dae")
+				m.appendLog("info", "已自动补齐 systemd dae.service 自启服务单元")
+			}
+		}
+	}
+	return nil
+}
+
+func flushSystemDNSCache() {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	if _, err := exec.LookPath("killall"); err == nil {
+		_, _ = runCommand(3*time.Second, "killall", "-HUP", "dnsmasq")
+	}
 }
 
 func (m *Manager) ConfigPath() string {
@@ -167,6 +338,13 @@ func (m *Manager) Validate(cfg string) (bool, string) {
 		return true, "配置语法与路由结构校验通过"
 	}
 
+	binPath, found := m.resolveDaeBin()
+	if !found {
+		msg := fmt.Sprintf("未检测到 dae 内核 (%s)，请先在面板概览页或「系统与日志 -> dae 内核管理」一键下载安装内核", binPath)
+		m.appendLog("error", msg)
+		return false, msg
+	}
+
 	dir := filepath.Dir(m.configPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return false, err.Error()
@@ -184,7 +362,7 @@ func (m *Manager) Validate(cfg string) (bool, string) {
 		return false, err.Error()
 	}
 
-	out, err := runCommand(45*time.Second, m.daeBin, "validate", "-c", f.Name())
+	out, err := runCommand(45*time.Second, binPath, "validate", "-c", f.Name())
 	outputStr := strings.TrimSpace(string(out))
 	if err != nil {
 		msg := err.Error()
@@ -262,11 +440,20 @@ func (m *Manager) startCurrentConfig() error {
 		m.appendLogUnlocked("info", "配置已应用 (Mock Engine)")
 		return nil
 	}
-	if m.hasInitScript {
-		for _, args := range [][]string{{"set", "dae.config.enabled=1"}, {"set", "dae.config.config_file=" + m.configPath}, {"commit", "dae"}} {
-			out, err := runCommand(5*time.Second, "uci", args...)
-			if err != nil {
-				return fmt.Errorf("更新 dae 服务设置失败: %w %s", err, strings.TrimSpace(string(out)))
+
+	binPath, found := m.resolveDaeBin()
+	if !found {
+		return fmt.Errorf("未检测到 dae 内核 (%s)，请先一键下载安装内核", binPath)
+	}
+	_ = m.EnsureServiceScripts(binPath)
+
+	if _, err := os.Stat("/etc/init.d/dae"); err == nil {
+		if _, uciLookErr := exec.LookPath("uci"); uciLookErr == nil {
+			for _, args := range [][]string{{"set", "dae.config.enabled=1"}, {"set", "dae.config.config_file=" + m.configPath}, {"commit", "dae"}} {
+				out, uciErr := runCommand(5*time.Second, "uci", args...)
+				if uciErr != nil {
+					return fmt.Errorf("更新 dae 服务设置失败: %w %s", uciErr, strings.TrimSpace(string(out)))
+				}
 			}
 		}
 		out, err := runCommand(50*time.Second, "/etc/init.d/dae", "start")
@@ -276,6 +463,7 @@ func (m *Manager) startCurrentConfig() error {
 		for i := 0; i < 20; i++ {
 			if pid := detectDaePID(); pid > 0 {
 				m.recordRunning(pid)
+				flushSystemDNSCache()
 				return nil
 			}
 			time.Sleep(250 * time.Millisecond)
@@ -283,20 +471,29 @@ func (m *Manager) startCurrentConfig() error {
 		return fmt.Errorf("启动命令结束后未找到 dae 进程，请查看运行日志")
 	}
 
+	if !isOpenWrtHost() && hasSystemdDaeUnit() && m.configPath == "/etc/dae/config.dae" {
+		if _, lookErr := exec.LookPath("systemctl"); lookErr == nil {
+			out, err := runCommand(50*time.Second, "systemctl", "start", "dae")
+			if err != nil {
+				return fmt.Errorf("通过 systemd 启动 dae 失败: %w %s", err, strings.TrimSpace(string(out)))
+			}
+			for i := 0; i < 20; i++ {
+				if pid := detectDaePID(); pid > 0 {
+					m.recordRunning(pid)
+					flushSystemDNSCache()
+					return nil
+				}
+				time.Sleep(250 * time.Millisecond)
+			}
+			return fmt.Errorf("systemctl 启动结束后未找到 dae 进程，请查看运行日志")
+		}
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// Keep core logging independent of the panel's lifetime. Pipes lose their
-	// reader when the panel restarts, which can break the core during reload.
-	logDir := "/var/log/dae"
-	if runtime.GOOS != "linux" {
-		logDir = filepath.Dir(m.configPath)
-	}
-	if err := os.MkdirAll(logDir, 0o700); err != nil {
-		return err
-	}
-	cmd := exec.Command(m.daeBin, "run", "-c", m.configPath,
-		"--logfile", filepath.Join(logDir, "dae.log"),
-		"--logfile-maxsize", "2", "--logfile-maxbackups", "1")
+	cmd := exec.Command(binPath, "run", "-c", m.configPath)
+	stdout, _ := cmd.StdoutPipe()
+	stderr, _ := cmd.StderrPipe()
 	if err := cmd.Start(); err != nil {
 		m.appendLogUnlocked("error", "启动 dae 失败: "+err.Error())
 		return err
@@ -308,7 +505,10 @@ func (m *Manager) startCurrentConfig() error {
 	m.startedAt = time.Now()
 	m.lastReloadedAt = time.Now().Format(time.RFC3339)
 	m.appendLogUnlocked("info", fmt.Sprintf("dae 核心进程已启动 (PID=%d)", m.pid))
+	flushSystemDNSCache()
 
+	go m.streamLogs(stdout)
+	go m.streamLogs(stderr)
 	go func() {
 		err := cmd.Wait()
 		m.mu.Lock()
@@ -336,18 +536,21 @@ func (m *Manager) Stop() error {
 		m.mu.Unlock()
 		return nil
 	}
-	hasInit := m.hasInitScript
 	var childProc *os.Process
 	if m.cmd != nil {
 		childProc = m.cmd.Process
 	}
 	m.mu.Unlock()
 
-	if hasInit {
+	if _, err := os.Stat("/etc/init.d/dae"); err == nil {
 		_, _ = runCommand(5*time.Second, "uci", "set", "dae.config.enabled=0")
 		_, _ = runCommand(5*time.Second, "uci", "commit", "dae")
 		if out, err := runCommand(15*time.Second, "/etc/init.d/dae", "stop"); err != nil {
 			m.appendLog("warn", fmt.Sprintf("执行 init.d stop 返回异常: %v %s", err, strings.TrimSpace(string(out))))
+		}
+	} else if !isOpenWrtHost() && hasSystemdDaeUnit() {
+		if _, lookErr := exec.LookPath("systemctl"); lookErr == nil {
+			_, _ = runCommand(15*time.Second, "systemctl", "stop", "dae")
 		}
 	}
 	if childProc != nil {
@@ -394,13 +597,17 @@ func (m *Manager) recordRunning(pid int) {
 }
 
 func (m *Manager) reloadCurrentConfig(pid int, abortConnections bool) error {
+	binPath, found := m.resolveDaeBin()
+	if !found {
+		return fmt.Errorf("未检测到 dae 内核 (%s)", binPath)
+	}
 	args := []string{"reload", strconv.Itoa(pid)}
 	if abortConnections {
 		args = append(args, "--abort")
 	}
 	// dae reports its own reload deadline after about 60 seconds. Do not send
 	// a second signal when the first command reports failure or is still busy.
-	out, err := runCommand(68*time.Second, m.daeBin, args...)
+	out, err := runCommand(68*time.Second, binPath, args...)
 	if err != nil {
 		detail := strings.TrimSpace(string(out))
 		m.appendLog("error", fmt.Sprintf("dae 重载失败: %v %s", err, detail))
@@ -410,6 +617,7 @@ func (m *Manager) reloadCurrentConfig(pid int, abortConnections bool) error {
 		return fmt.Errorf("dae 在重载后退出，请查看运行日志")
 	}
 	m.recordRunning(pid)
+	flushSystemDNSCache()
 	m.appendLog("info", fmt.Sprintf("dae 已确认重载完成 (PID=%d)", pid))
 	return nil
 }
@@ -421,6 +629,7 @@ func (m *Manager) SyncNodeEndpoints(targets []EndpointTarget) {
 }
 
 func (m *Manager) Stats() RuntimeStats {
+	coreInstalled := m.IsCoreInstalled()
 	m.mu.Lock()
 	if !m.mockMode {
 		pid := detectDaePID()
@@ -461,6 +670,7 @@ func (m *Manager) Stats() RuntimeStats {
 
 	return RuntimeStats{
 		Running:         running,
+		CoreInstalled:   coreInstalled,
 		MockMode:        mockMode,
 		PID:             pid,
 		UptimeSeconds:   uptime,

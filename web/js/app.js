@@ -58,7 +58,7 @@ async function loadBootstrap() {
   try {
     const data = await apiFetch("/api/v1/bootstrap");
     store.state = normalizeState(data.state);
-    store.panelVersion = data.panelVersion || store.panelVersion || "v1.0.10";
+    store.panelVersion = data.panelVersion || store.panelVersion || "v2.0.0";
     store.updateRepo = data.updateRepo ?? store.state?.updateRepo ?? "";
     store.geoDataStatus = data.geoDataStatus || store.geoDataStatus;
     store.configDae = data.configDae || "";
@@ -69,7 +69,10 @@ async function loadBootstrap() {
     chart.push(store.stats.uploadBps, store.stats.downloadBps);
 
     setText("side-panel-ver", store.panelVersion);
-    const verLine = (store.doctor?.daeVersion || "dae").split("\n")[0].replace("dae version ", "");
+    const coreMissing = !store.stats?.mockMode && (store.stats?.coreInstalled === false || store.doctor?.daeBinaryFound === false);
+    const verLine = coreMissing
+      ? "内核未安装"
+      : (store.doctor?.daeVersion || "dae").split("\n")[0].replace("dae version ", "");
     setText("side-dae-ver", verLine);
 
     syncHeader();
@@ -121,8 +124,13 @@ function startTelemetryLoop() {
         return;
       }
       if (data.stats) {
+        const coreChanged = store.stats?.coreInstalled !== data.stats.coreInstalled;
         store.stats = data.stats;
         chart.push(data.stats.uploadBps, data.stats.downloadBps);
+        if (coreChanged && !modalOpen) {
+          await loadBootstrap();
+          return;
+        }
       }
       if (data.logs) store.logs = data.logs;
       syncHeader();
@@ -304,9 +312,12 @@ function syncHeader() {
   const pill = document.getElementById("service-pill");
   const txt = document.getElementById("service-status-text");
   if (pill && txt) {
-    if (store.stats.running) {
+    if (!store.stats.mockMode && store.stats.coreInstalled === false) {
+      pill.className = "state-badge offline";
+      txt.textContent = "未安装内核";
+    } else if (store.stats.running) {
       pill.className = "state-badge online";
-      txt.textContent = store.stats.mockMode ? "预览模式" : "运行中";
+      txt.textContent = store.stats.mockMode ? "本地预览" : "运行中";
     } else {
       pill.className = "state-badge offline";
       txt.textContent = "已停止";
@@ -506,6 +517,8 @@ function renderOverview(root) {
   const s = store.stats;
   const enabledNodes = activeNodes(st);
   const usableSubs = (st.subscriptions || []).filter((sub) => sub.enabled && enabledNodes.some((node) => node.subId === sub.id));
+  const coreMissing = !s.mockMode && (s.coreInstalled === false || store.doctor?.daeBinaryFound === false);
+  const geoMissing = !s.mockMode && store.geoDataStatus && (!store.geoDataStatus.geoip?.exists || !store.geoDataStatus.geosite?.exists);
 
   root.innerHTML = `
     <div class="section-top">
@@ -515,15 +528,39 @@ function renderOverview(root) {
       </div>
       <div class="toolbar">
         <button class="btn btn-sm" id="ov-btn-conn">检测连通性</button>
-        <button class="btn btn-sm" id="ov-btn-probe" ${store.probing ? "disabled" : ""}>${store.probing ? "检测中..." : "测试节点 TCP"}</button>
-        <button class="btn btn-sm" id="ov-btn-reload">热重载</button>
+        <button class="btn btn-sm" id="ov-btn-probe" ${store.probing ? "disabled" : ""}>${store.probing ? "测速中..." : "全节点测速"}</button>
+        <button class="btn btn-sm" id="ov-btn-reload" ${coreMissing ? "disabled" : ""}>热重载</button>
         ${
           s.running
             ? `<button class="btn btn-sm btn-danger-text" id="ov-btn-stop">停止服务</button>`
-            : `<button class="btn btn-sm btn-primary" id="ov-btn-start">启动服务</button>`
+            : `<button class="btn btn-sm btn-primary" id="ov-btn-start" ${coreMissing ? "disabled" : ""}>启动服务</button>`
         }
       </div>
     </div>
+
+    ${
+      coreMissing
+        ? `<div class="panel panel-pad" style="border-color:var(--warn);background:var(--warn-bg);display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
+            <div style="min-width:240px;flex:1;">
+              <div style="font-weight:700;font-size:15px;color:var(--text);">尚未检测到 dae 内核（/usr/bin/dae）</div>
+              <div id="ov-env-setup-msg" style="font-size:13.5px;color:var(--text-sec);margin-top:4px;line-height:1.55;">
+                点击右侧按钮将从官方仓库自动下载当前架构稳定版 <code class="mono">dae</code> 内核、自动补齐开机自启服务脚本及 <code class="mono">geoip.dat</code> / <code class="mono">geosite.dat</code> 分流数据库；完成后导入节点点击「保存并应用」即可直接使用。
+              </div>
+            </div>
+            <button type="button" class="btn btn-primary" id="ov-btn-bootstrap-core">一键自动安装内核与分流库</button>
+          </div>`
+        : geoMissing
+        ? `<div class="panel panel-pad" style="border-color:var(--warn);background:var(--warn-bg);display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
+            <div style="min-width:240px;flex:1;">
+              <div style="font-weight:700;font-size:15px;color:var(--text);">检测到缺失 GeoIP / GeoSite 分流数据库</div>
+              <div id="ov-env-setup-msg" style="font-size:13.5px;color:var(--text-sec);margin-top:4px;line-height:1.55;">
+                分流规则依赖 <code class="mono">geoip.dat</code> 与 <code class="mono">geosite.dat</code>，点击右侧按钮将自动下载并校验补齐。
+              </div>
+            </div>
+            <button type="button" class="btn btn-primary" id="ov-btn-bootstrap-geo">一键下载补齐分流库</button>
+          </div>`
+        : ""
+    }
 
     <!-- 4-Site Real Connectivity Bar -->
     <div id="ov-conn-bar" class="conn-bar"></div>
@@ -619,9 +656,9 @@ function renderOverview(root) {
       <div class="metric-box">
         <div class="metric-label">
           <span>dae 内核引擎</span>
-          <span class="tag ${s.running ? "tag-ok" : "tag-err"}">${s.running ? "运行中" : "未运行"}</span>
+          <span class="tag ${coreMissing ? "tag-warn" : s.running ? "tag-ok" : "tag-err"}">${coreMissing ? "未安装内核" : s.running ? "运行中" : "未运行"}</span>
         </div>
-        <div class="metric-val mono" id="ov-uptime">${s.running ? formatUptime(s.uptimeSeconds) : "已停止"}</div>
+        <div class="metric-val mono" id="ov-uptime">${coreMissing ? "待安装" : s.running ? formatUptime(s.uptimeSeconds) : "已停止"}</div>
         <div class="metric-meta mono" id="ov-proc-meta">
           <span class="meta-chip">PID <strong>${s.pid || "-"}</strong></span>
           <span class="meta-chip">内存 <strong>${s.memoryMb} MB</strong></span>
@@ -651,6 +688,53 @@ function renderOverview(root) {
   root.querySelector("#ov-btn-reload")?.addEventListener("click", () => runServiceAction("reload"));
   root.querySelector("#ov-btn-start")?.addEventListener("click", () => runServiceAction("start"));
   root.querySelector("#ov-btn-stop")?.addEventListener("click", () => runServiceAction("stop"));
+
+  root.querySelector("#ov-btn-bootstrap-core")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const msgEl = root.querySelector("#ov-env-setup-msg");
+    btn.disabled = true;
+    btn.textContent = "正在自动安装…";
+    if (msgEl) msgEl.textContent = "正在从官方 GitHub 仓库下载并 SHA-256 校验 dae 内核、补齐自启服务与分流数据库，请稍候（约 15~60 秒）…";
+    try {
+      const res = await apiFetch("/api/v1/core/update", {
+        method: "POST",
+        timeoutMs: 240000,
+        body: JSON.stringify({ version: "latest" }),
+      });
+      if (!res.ok) throw new Error(res.error || "安装内核未完成");
+      toast("dae 内核、自启服务与分流数据库已全部安装就绪！", "success");
+      await loadBootstrap();
+    } catch (err) {
+      toast("自动安装失败：" + err.message, "error");
+      if (msgEl) msgEl.textContent = "自动安装未完成：" + err.message;
+      btn.disabled = false;
+      btn.textContent = "一键自动安装内核与分流库";
+    }
+  });
+
+  root.querySelector("#ov-btn-bootstrap-geo")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const msgEl = root.querySelector("#ov-env-setup-msg");
+    btn.disabled = true;
+    btn.textContent = "正在下载补齐…";
+    if (msgEl) msgEl.textContent = "正在下载并校验 geoip.dat 与 geosite.dat，请稍候…";
+    try {
+      const res = await apiFetch("/api/v1/geodata/update", {
+        method: "POST",
+        timeoutMs: 210000,
+        body: JSON.stringify({ target: "all" }),
+      });
+      if (!res.ok) throw new Error(res.error || "下载分流数据库失败");
+      if (res.geoDataStatus) store.geoDataStatus = res.geoDataStatus;
+      toast(res.message || "分流数据库已补齐", "success");
+      renderPage();
+    } catch (err) {
+      toast("下载失败：" + err.message, "error");
+      if (msgEl) msgEl.textContent = "下载失败：" + err.message;
+      btn.disabled = false;
+      btn.textContent = "一键下载补齐分流库";
+    }
+  });
 
   root.querySelectorAll("[data-grp-auto]").forEach((btn) => {
     btn.addEventListener("click", () => switchGroup(Number(btn.dataset.grpAuto), "自动选择", (group) => {
@@ -736,10 +820,11 @@ function renderConnectivityBarDOM() {
 
 function updateOverviewLiveMetrics() {
   const s = store.stats;
+  const coreMissing = !s.mockMode && (s.coreInstalled === false || store.doctor?.daeBinaryFound === false);
   setText("ov-down-bps", `↓ ${formatSpeed(s.downloadBps)}`);
   setText("ov-up-bps", `↑ ${formatSpeed(s.uploadBps)}`);
   setText("ov-total-bytes", `总计 ↓ ${formatBytes(s.totalDownload)} · ↑ ${formatBytes(s.totalUpload)}`);
-  setText("ov-uptime", s.running ? formatUptime(s.uptimeSeconds) : "已停止");
+  setText("ov-uptime", coreMissing ? "待安装" : s.running ? formatUptime(s.uptimeSeconds) : "已停止");
   const meta = document.getElementById("ov-proc-meta");
   if (meta) {
     meta.innerHTML = `<span class="meta-chip">PID <strong>${s.pid || "-"}</strong></span><span class="meta-chip">内存 <strong>${s.memoryMb} MB</strong></span><span class="meta-chip">连接 <strong>${s.activeConns}</strong></span>`;
@@ -837,7 +922,7 @@ function renderProxiesAndSubs(root) {
         <button class="btn btn-sm" id="px-btn-add-sub">添加订阅源</button>
         <button class="btn btn-sm" id="px-btn-add-node">添加 / 批量导入节点</button>
         <button class="btn btn-sm btn-primary" id="px-btn-probe-all" ${store.probing ? "disabled" : ""}>
-          ${store.probing ? "检测中..." : "测试全部 TCP 建连"}
+          ${store.probing ? "正在测速..." : "测试全部延迟"}
         </button>
       </div>
     </div>
@@ -924,7 +1009,7 @@ function renderProxiesAndSubs(root) {
           </select>
         </div>
         <select id="nd-sort" class="select select-sm" style="width:140px;">
-          <option value="latency" ${nf.sortBy === "latency" ? "selected" : ""}>按 TCP 建连耗时升序</option>
+          <option value="latency" ${nf.sortBy === "latency" ? "selected" : ""}>按延迟升序</option>
           <option value="name" ${nf.sortBy === "name" ? "selected" : ""}>按名称排序</option>
         </select>
       </div>
@@ -941,7 +1026,7 @@ function renderProxiesAndSubs(root) {
                     <th>来源</th>
                     <th>协议</th>
                     <th>服务器地址</th>
-                    <th title="路由器连接节点服务器端口的耗时，包含地址解析；不包含代理握手或网站请求">TCP 建连</th>
+                    <th>延迟</th>
                     <th style="text-align:right;">操作</th>
                   </tr>
                 </thead>
@@ -2717,7 +2802,8 @@ function bindCoreUpdate(container) {
   const status = container.querySelector("#core-update-status");
   const releaseLink = container.querySelector("#core-release-link");
   let version = "";
-  check.addEventListener("click", async () => {
+  let freshInstall = false;
+  check?.addEventListener("click", async () => {
     check.disabled = true;
     install.classList.add("hidden");
     releaseLink.classList.add("hidden");
@@ -2726,15 +2812,19 @@ function bindCoreUpdate(container) {
       const release = await apiFetch("/api/v1/core/update", { timeoutMs: 25000 });
       if (release.error) throw new Error(release.error);
       version = release.latest;
-      status.textContent = "当前 " + release.current + " · 最新稳定版 " + version;
+      freshInstall = release.installed === false;
+      status.textContent = freshInstall
+        ? `当前未安装内核 · 最新官方稳定版 ${version}`
+        : `当前 ${release.current} · 最新稳定版 ${version}`;
       releaseLink.href = release.url;
       releaseLink.classList.remove("hidden");
-      if (release.installable && store.state.auth?.enabled) {
+      if (release.installable) {
+        install.textContent = freshInstall ? "一键下载并安装" : "下载并更新";
         install.classList.remove("hidden");
-      } else if (release.installable) {
-        status.textContent += " · 启用面板登录鉴权后可安装";
       } else if (release.available) {
-        status.textContent += " · 当前环境请按官方说明更新";
+        status.textContent += " · 当前已通过系统包管理器管理，请使用包管理器升级";
+      } else {
+        status.textContent += " · 已是最新稳定版";
       }
     } catch (err) {
       status.textContent = "检查失败：" + err.message;
@@ -2742,14 +2832,18 @@ function bindCoreUpdate(container) {
       check.disabled = false;
     }
   });
-  install.addEventListener("click", () => {
+  install?.addEventListener("click", () => {
     if (store.dirty) {
       toast("请先保存面板中的配置改动", "error");
       return;
     }
     openModal({
-      title: `安装 dae ${version}`,
-      bodyHTML: `<div style="font-size:15px;line-height:1.65;color:var(--text-sec);">确认下载并安装官方稳定版 <code class="mono">dae ${escapeHTML(version)}</code> 吗？代理服务重启期间连接可能短暂中断。</div>`,
+      title: `${freshInstall ? "安装" : "更新至"} dae ${version}`,
+      bodyHTML: `<div style="font-size:15px;line-height:1.65;color:var(--text-sec);">${
+        freshInstall
+          ? `确认下载并安装官方稳定版 <code class="mono">dae ${escapeHTML(version)}</code> 吗？系统将同时自动补齐自启服务脚本及 <code class="mono">geoip.dat</code> / <code class="mono">geosite.dat</code> 分流数据库。`
+          : `确认下载并更新至官方稳定版 <code class="mono">dae ${escapeHTML(version)}</code> 吗？代理服务重启期间连接可能短暂中断。`
+      }</div>`,
       footerHTML: `<button class="btn" id="m-core-cancel">取消</button><button class="btn btn-primary" id="m-core-ok">确认下载并安装</button>`,
       onMount(box) {
         box.querySelector("#m-core-cancel")?.addEventListener("click", closeModal);
@@ -2757,20 +2851,27 @@ function bindCoreUpdate(container) {
           closeModal();
           install.disabled = true;
           check.disabled = true;
-          status.textContent = "正在下载、校验并更新内核…";
+          status.textContent = freshInstall ? "正在下载内核并自动补齐服务脚本与分流库…" : "正在下载、校验并更新内核…";
           try {
             const result = await apiFetch("/api/v1/core/update", {
               method: "POST",
-              timeoutMs: 210000,
+              timeoutMs: 240000,
               body: JSON.stringify({ version }),
             });
             if (!result.ok) throw new Error(result.error || "安装未完成");
             install.classList.add("hidden");
-            status.textContent = "已安装 dae " + version;
-            store.doctor = await apiFetch("/api/v1/doctor");
-            setText("side-dae-ver", (store.doctor.daeVersion || version).split("\n")[0].replace("dae version ", ""));
+            if (result.doctor) store.doctor = result.doctor;
+            else store.doctor = await apiFetch("/api/v1/doctor");
+            if (result.stats) store.stats = result.stats;
+            if (result.geoDataStatus) store.geoDataStatus = result.geoDataStatus;
+            const verStr = (store.doctor?.daeVersion || version).split("\n")[0].replace("dae version ", "");
+            setText("side-dae-ver", verStr);
+            syncHeader();
+            toast(`已成功安装 dae ${version}`, "success");
+            renderSysLogs(container);
           } catch (err) {
-            status.textContent = "更新结果：" + err.message;
+            status.textContent = "安装结果：" + err.message;
+            toast("安装内核失败：" + err.message, "error");
             install.classList.add("hidden");
           } finally {
             install.disabled = false;
@@ -2829,63 +2930,20 @@ function openUpdateRepoModal(container) {
   });
 }
 
-function openPanelUpdateAuth(onReady) {
-  openModal({
-    title: "设置登录后继续升级",
-    bodyHTML: `
-      <p class="field-hint">在线升级需要管理员登录。保存后将自动重新检测更新。</p>
-      <div class="field"><label class="field-label" for="panel-auth-user">管理员账号</label>
-        <input id="panel-auth-user" class="input" autocomplete="username" value="${escapeHTML(store.state.auth?.username || "admin")}" /></div>
-      <div class="field"><label class="field-label" for="panel-auth-pass">登录密码</label>
-        <input id="panel-auth-pass" class="input" type="password" autocomplete="new-password" /></div>
-      <div class="field"><label class="field-label" for="panel-auth-confirm">确认密码</label>
-        <input id="panel-auth-confirm" class="input" type="password" autocomplete="new-password" /></div>
-      <p id="panel-auth-error" class="field-hint" role="alert"></p>`,
-    footerHTML: `<button class="btn" id="panel-auth-cancel">取消</button><button class="btn btn-primary" id="panel-auth-save">启用登录并继续</button>`,
-    onMount(box) {
-      box.querySelector("#panel-auth-cancel").addEventListener("click", closeModal);
-      box.querySelector("#panel-auth-save").addEventListener("click", async () => {
-        const btn = box.querySelector("#panel-auth-save");
-        const error = box.querySelector("#panel-auth-error");
-        const username = box.querySelector("#panel-auth-user").value.trim();
-        const password = box.querySelector("#panel-auth-pass").value;
-        if (!username || !password) { error.textContent = "请填写账号和密码"; return; }
-        if (password !== box.querySelector("#panel-auth-confirm").value) { error.textContent = "两次密码不一致"; return; }
-        btn.disabled = true;
-        try {
-          const res = await apiFetch("/api/v1/auth/update", { method: "POST", body: JSON.stringify({ enabled: true, username, password }) });
-          if (!res.ok) throw new Error(res.error || "设置登录失败");
-          store.token = res.token || store.token;
-          localStorage.setItem("daed_next_token", store.token);
-          store.state.auth = res.auth;
-          closeModal();
-          toast("登录保护已启用，请确认升级", "success");
-          onReady();
-        } catch (err) { error.textContent = err.message; }
-        finally { btn.disabled = false; }
-      });
-      box.querySelector("#panel-auth-pass").focus();
-    },
-  });
-}
-
 function bindPanelUpdate(container) {
   const checkBtn = container.querySelector("#panel-check");
   const installBtn = container.querySelector("#panel-install");
-  const authBtn = container.querySelector("#panel-auth-setup");
   const repoBtn = container.querySelector("#panel-repo-btn");
   const statusEl = container.querySelector("#panel-update-status");
   const releaseLink = container.querySelector("#panel-release-link");
   let latestVersion = "";
   let checkedRepo = "";
-  authBtn?.addEventListener("click", () => openPanelUpdateAuth(() => checkBtn.click()));
 
   repoBtn?.addEventListener("click", () => openUpdateRepoModal(container));
 
   checkBtn?.addEventListener("click", async () => {
     checkBtn.disabled = true;
     installBtn.classList.add("hidden");
-    authBtn?.classList.add("hidden");
     releaseLink.classList.add("hidden");
     try {
       statusEl.textContent = "正在查询 DaeStudio 最新版本…";
@@ -2905,10 +2963,9 @@ function bindPanelUpdate(container) {
         if (release.installable && store.state.auth?.enabled) {
           installBtn.classList.remove("hidden");
         } else if (release.installable) {
-          statusEl.textContent += " · 请先设置管理员登录，再继续升级";
-          authBtn?.classList.remove("hidden");
+          statusEl.textContent += " · 启用面板登录鉴权后可一键升级";
         } else {
-          statusEl.textContent += " · " + (release.installReason || "当前环境请下载安装包手动升级");
+          statusEl.textContent += " · 当前环境请下载安装包手动升级";
         }
       } else {
         statusEl.textContent = `当前 ${release.current} · 已是最新正式版`;
@@ -3196,6 +3253,7 @@ function bindGeoDataPanel(container) {
 
 function renderSysLogs(container) {
   const checks = store.doctor?.checks || [];
+  const activeRepo = store.updateRepo || "未指定";
   const geoSt = store.geoDataStatus || {};
   const geoCfg = geoSt.config || store.state?.geoData || { preset: "loyalsoldier", autoUpdate: false, scheduleMode: "daily", scheduleTime: "04:00" };
   const geoIP = geoSt.geoip || {};
@@ -3207,38 +3265,46 @@ function renderSysLogs(container) {
 
   container.innerHTML = `
     <div class="split-2">
-      <div class="panel" style="display:flex;flex-direction:column;justify-content:space-between;">
-        <div class="panel-head">
+      <div class="panel" style="display:flex;flex-direction:column;justify-content:center;">
+        <div class="panel-head no-border">
           <div>
             <div style="display:flex;align-items:center;gap:8px;">
               <span class="panel-title">DaeStudio 面板更新</span>
-              <span class="tag tag-primary mono">${escapeHTML(store.panelVersion || "v1.0.10")}</span>
+              <span class="tag tag-primary mono">${escapeHTML(store.panelVersion || "v2.0.0")}</span>
             </div>
-            <div id="panel-update-status" class="section-sub" aria-live="polite">当前版本 ${escapeHTML(store.panelVersion || "v1.0.10")} · 支持在线检测与 SHA-256 校验升级</div>
+            <div id="panel-update-status" class="section-sub" aria-live="polite">当前版本 ${escapeHTML(store.panelVersion || "v2.0.0")} · 支持在线检测与 SHA-256 校验升级</div>
           </div>
           <div class="toolbar">
             <a id="panel-release-link" class="btn btn-sm hidden" target="_blank" rel="noopener noreferrer">发行说明</a>
             <button class="btn btn-sm" id="panel-check">检测更新</button>
-            <button class="btn btn-primary btn-sm hidden" id="panel-auth-setup">设置登录并继续</button>
             <button class="btn btn-primary btn-sm hidden" id="panel-install">一键升级</button>
           </div>
         </div>
-
+        <div class="panel-foot hidden">
+          <span>更新仓库：<span class="mono">${escapeHTML(activeRepo)}</span></span>
+          <button type="button" class="btn btn-subtle btn-sm" id="panel-repo-btn">更新源</button>
+        </div>
       </div>
 
-      <div class="panel" style="display:flex;flex-direction:column;justify-content:space-between;">
-        <div class="panel-head">
+      <div class="panel" style="display:flex;flex-direction:column;justify-content:center;">
+        <div class="panel-head no-border">
           <div>
-            <div class="panel-title">dae 内核更新</div>
-            <div id="core-update-status" class="section-sub" aria-live="polite">${escapeHTML((store.doctor?.daeVersion || "").split("\n")[0])}</div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span class="panel-title">dae 内核管理</span>
+              <span class="tag ${!store.stats?.mockMode && store.doctor?.daeBinaryFound === false ? "tag-warn" : "tag-ok"}">${!store.stats?.mockMode && store.doctor?.daeBinaryFound === false ? "未安装" : "已就绪"}</span>
+            </div>
+            <div id="core-update-status" class="section-sub" aria-live="polite">${
+              !store.stats?.mockMode && store.doctor?.daeBinaryFound === false
+                ? "尚未检测到 /usr/bin/dae 内核 · 点击右侧按钮一键检测并安装"
+                : escapeHTML((store.doctor?.daeVersion || "").split("\n")[0])
+            }</div>
           </div>
           <div class="toolbar">
             <a id="core-release-link" class="btn btn-sm hidden" target="_blank" rel="noopener noreferrer">发行说明</a>
-            <button class="btn btn-sm" id="core-check">检查更新</button>
+            <button class="btn btn-sm" id="core-check">${!store.stats?.mockMode && store.doctor?.daeBinaryFound === false ? "检测最新内核" : "检查更新"}</button>
             <button class="btn btn-primary btn-sm hidden" id="core-install">下载并安装</button>
           </div>
         </div>
-
       </div>
     </div>
 

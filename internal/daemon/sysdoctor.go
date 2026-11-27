@@ -88,9 +88,24 @@ func RunSystemDoctor(daeBin string, mockMode bool) DoctorReport {
 		Interfaces: listHostInterfaces(),
 	}
 
-	if path, err := exec.LookPath(daeBin); err == nil && path != "" {
-		rep.DaeBinaryFound = true
-		rep.DaeVersion = cachedDaeVersion(path)
+	trimmedBin := strings.TrimSpace(daeBin)
+	if trimmedBin == "" {
+		trimmedBin = "dae"
+	}
+	if path, err := exec.LookPath(trimmedBin); err == nil && path != "" {
+		if st, statErr := os.Stat(path); statErr == nil && !st.IsDir() {
+			rep.DaeBinaryFound = true
+			rep.DaeVersion = cachedDaeVersion(path)
+		}
+	}
+	if !rep.DaeBinaryFound && (trimmedBin == "dae" || trimmedBin == "/usr/bin/dae" || trimmedBin == "/usr/local/bin/dae") {
+		for _, cand := range []string{"/usr/bin/dae", "/usr/local/bin/dae"} {
+			if st, err := os.Stat(cand); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
+				rep.DaeBinaryFound = true
+				rep.DaeVersion = cachedDaeVersion(cand)
+				break
+			}
+		}
 	}
 
 	if runtime.GOOS != "linux" {
@@ -150,7 +165,7 @@ func RunSystemDoctor(daeBin string, mockMode bool) DoctorReport {
 			Status:      "fail",
 			Current:     "未找到 " + daeBin,
 			Requirement: "需安装 dae 核心至 /usr/bin/dae 或通过 -dae-bin 指定路径",
-			Remediation: "请安装官方 dae 二进制包（OpenWrt 可执行 opkg install dae 或 apk add dae）。",
+			Remediation: "可在面板概览页或上方「dae 内核管理」一键下载安装官方内核，或执行 opkg install dae / apk add dae。",
 		})
 	}
 

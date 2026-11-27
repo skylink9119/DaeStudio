@@ -252,7 +252,7 @@ func DefaultState() AppState {
 		Global: GlobalConfig{
 			WanInterface:              "auto",
 			LanInterfaces:             []string{"br-lan"},
-			DialMode:                  "domain++",
+			DialMode:                  "domain+",
 			LogLevel:                  "info",
 			TproxyPort:                12345,
 			TproxyPortProtect:         true,
@@ -265,7 +265,7 @@ func DefaultState() AppState {
 			TcpCheckHttpMethod:        "HEAD",
 			UdpCheckDns:               "dns.google:53,8.8.8.8,2001:4860:4860::8888",
 			SniffingTimeout:           "100ms",
-			TlsImplementation:         "tls",
+			TlsImplementation:         "utls",
 			UtlsImitate:               "chrome_auto",
 			Mptcp:                     false,
 			DisableWaitingNetwork:     false,
@@ -318,7 +318,7 @@ func DefaultState() AppState {
 			{
 				ID: "node-us-01", Tag: "us_gpt_01", Name: "🇺🇸 美国 硅谷 AI 原生解锁 01",
 				Protocol: "vless", Address: "208.67.222.222", Port: 443,
-				URI:   "vless://00000000-0000-0000-0000-000000000003@208.67.222.222:443?encryption=none&security=reality&sni=apple.com&pbk=demo#US-AI-01",
+				URI:   "vless://00000000-0000-0000-0000-000000000003@208.67.222.222:443?encryption=none&security=reality&sni=apple.com#US-AI-01",
 				SubID: "sub-main", SubTag: "airport_main", Region: "US", Enabled: true, LatencyMs: 142, Alive: true, CheckedAt: now,
 			},
 			{
@@ -330,7 +330,7 @@ func DefaultState() AppState {
 			{
 				ID: "node-custom-01", Tag: "self_hosted_jp", Name: "🛠️ 自建日本落地 VLESS",
 				Protocol: "vless", Address: "1.1.1.1", Port: 443,
-				URI:   "vless://00000000-0000-0000-0000-000000000099@1.1.1.1:443?encryption=none&security=reality&sni=yahoo.co.jp&pbk=demo#Self-JP",
+				URI:   "vless://00000000-0000-0000-0000-000000000099@1.1.1.1:443?encryption=none&security=reality&sni=yahoo.co.jp#Self-JP",
 				SubID: "", SubTag: "", Region: "JP", Enabled: true, LatencyMs: 49, Alive: true, CheckedAt: now,
 			},
 		},
@@ -388,7 +388,7 @@ func DefaultState() AppState {
 			Rules: []RoutingRule{
 				{
 					ID: "rt-1", Enabled: true, Name: "绕过系统核心网络进程防回环", Category: "system",
-					Conditions: []RoutingCondition{{Field: "pname", Value: "NetworkManager, systemd-resolved, dnsmasq"}},
+					Conditions: []RoutingCondition{{Field: "pname", Value: "NetworkManager, netifd, odhcp6c, pppd, ntpd, chronyd"}},
 					Outbound:   "must_direct",
 				},
 				{

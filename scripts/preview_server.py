@@ -318,7 +318,7 @@ def default_state() -> dict:
                     "enabled": True,
                     "name": "绕过系统核心网络进程防回环",
                     "category": "system",
-                    "conditions": [{"negate": False, "field": "pname", "value": "NetworkManager, systemd-resolved, dnsmasq"}],
+                    "conditions": [{"negate": False, "field": "pname", "value": "NetworkManager, netifd, odhcp6c, pppd, ntpd, chronyd"}],
                     "outbound": "must_direct",
                 },
                 {
@@ -1183,6 +1183,7 @@ class AppContext:
                     }
             return {
                 "running": self.running,
+                "coreInstalled": True,
                 "mockMode": platform.system().lower() != "linux" or shutil.which("dae") is None,
                 "pid": os.getpid() if self.running else 0,
                 "uptimeSeconds": uptime,
@@ -1312,7 +1313,7 @@ class DaeStudioHandler(SimpleHTTPRequestHandler):
                 200,
                 {
                     "state": st,
-                    "panelVersion": "v1.0.3",
+                    "panelVersion": "v2.0.0",
                     "updateRepo": st.get("updateRepo") or os.environ.get("DAED_NEXT_REPO", ""),
                     "geoDataStatus": geo_status,
                     "configDae": render_config_dae(st),
@@ -1345,9 +1346,9 @@ class DaeStudioHandler(SimpleHTTPRequestHandler):
             if q.get("repo"):
                 repo = q["repo"][0].strip()
             if not repo:
-                self._send_json(400, {"error": "请先填写面板 GitHub 仓库地址（格式：owner/repo）", "current": "v1.0.3", "needRepoConfig": True})
+                self._send_json(400, {"error": "请先填写面板 GitHub 仓库地址（格式：owner/repo）", "current": "v2.0.0", "needRepoConfig": True})
                 return
-            self._send_json(200, {"current": "v1.0.3", "latest": "v1.0.3", "repo": repo, "url": f"https://github.com/{repo}/releases", "available": False, "installable": False})
+            self._send_json(200, {"current": "v2.0.0", "latest": "v2.0.0", "repo": repo, "url": f"https://github.com/{repo}/releases", "available": False, "installable": False})
             return
         if path == "/api/v1/stats":
             if not self._check_auth():

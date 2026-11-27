@@ -25,7 +25,7 @@ import (
 
 // PanelVersion and DefaultUpdateRepo can be overridden at link time via -ldflags "-X ...".
 var (
-	PanelVersion      = "v1.0.10"
+	PanelVersion      = "v2.0.0"
 	DefaultUpdateRepo = ""
 )
 
@@ -45,18 +45,17 @@ func ErrRepoUnconfigured(err error) bool {
 }
 
 type PanelRelease struct {
-	Current       string `json:"current"`
-	Latest        string `json:"latest"`
-	Repo          string `json:"repo"`
-	URL           string `json:"url"`
-	PublishedAt   string `json:"publishedAt,omitempty"`
-	Available     bool   `json:"available"`
-	Installable   bool   `json:"installable"`
-	AssetName     string `json:"assetName,omitempty"`
-	InstallReason string `json:"installReason,omitempty"`
-	assetURL      string
-	sumsURL       string
-	digest        string
+	Current     string `json:"current"`
+	Latest      string `json:"latest"`
+	Repo        string `json:"repo"`
+	URL         string `json:"url"`
+	PublishedAt string `json:"publishedAt,omitempty"`
+	Available   bool   `json:"available"`
+	Installable bool   `json:"installable"`
+	AssetName   string `json:"assetName,omitempty"`
+	assetURL    string
+	sumsURL     string
+	digest      string
 }
 
 // NormalizeGitHubRepo extracts and validates an "owner/repo" slug (or empty string to clear).
@@ -303,24 +302,9 @@ func (m *Manager) CheckPanel(ctx context.Context, repo string) (PanelRelease, er
 	if hasValidExe && out.Available && !m.mockMode {
 		_, err := m.panelRestart(exe)
 		hasValidExe = err == nil
-		if err != nil {
-			out.InstallReason = err.Error()
-		}
 	}
 	hasChecksum := out.sumsURL != "" && out.digest != ""
 	out.Installable = out.Available && !m.mockMode && hasValidExe && out.assetURL != "" && hasChecksum
-	if out.Available && !out.Installable && out.InstallReason == "" {
-		switch {
-		case m.mockMode:
-			out.InstallReason = "预览环境不支持在线升级"
-		case !hasValidExe:
-			out.InstallReason = "无法确认当前可执行文件路径，请使用安装包升级"
-		case out.assetURL == "":
-			out.InstallReason = "发行版缺少当前架构的面板二进制"
-		case !hasChecksum:
-			out.InstallReason = "发行版缺少 SHA256SUMS 或 GitHub SHA-256 摘要"
-		}
-	}
 	return out, nil
 }
 

@@ -2,9 +2,9 @@
 # ==============================================================================
 # DaeStudio (daed-next) Universal One-Click Installer
 # Supports:
-#   - OpenWrt / iStoreOS / ImmortalWrt (procd + LuCI menu integration)
-#   - Debian / Ubuntu / Arch / Armbian / CentOS (systemd)
-#   - Architectures: x86_64 (amd64), aarch64 (arm64)
+#   - OpenWrt / iStoreOS / ImmortalWrt (procd + LuCI menu + dae init self-healing)
+#   - Debian / Ubuntu / Arch / Armbian / CentOS / PVE (systemd)
+#   - Architectures: x86_64 (amd64), i386 (386), aarch64 (arm64)
 # ==============================================================================
 
 set -e
@@ -14,7 +14,7 @@ trap 'rm -rf "$INSTALL_TMP"' EXIT
 trap 'exit 1' INT TERM
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO="${DAED_NEXT_REPO:-}"
+REPO="${DAED_NEXT_REPO:-skylink9119/DaeStudio}"
 
 echo "============================================================"
 echo "  DaeStudio (daed-next) 安装向导"
@@ -45,7 +45,7 @@ case "$UNAME_M" in
         exit 1
         ;;
 esac
-echo "[1/4] 检测到系统架构: linux/$ARCH ($UNAME_M)"
+echo "[1/5] 检测到系统架构: linux/$ARCH ($UNAME_M)"
 
 # 2. Locate or download binary
 BIN_SRC=""
@@ -60,15 +60,12 @@ elif [ -n "$REPO" ]; then
     echo "[下载] 正在从 $DL_URL 下载二进制..."
     if command -v curl >/dev/null 2>&1; then
         curl -fSL "$DL_URL" -o "$INSTALL_TMP/daed-next-bin"
-    else
-        wget -O "$INSTALL_TMP/daed-next-bin" "$DL_URL"
-    fi
-    BIN_SRC="$INSTALL_TMP/daed-next-bin"
-    if command -v curl >/dev/null 2>&1; then
         curl -fSL "https://github.com/$REPO/releases/latest/download/SHA256SUMS" -o "$INSTALL_TMP/SHA256SUMS"
     else
+        wget -O "$INSTALL_TMP/daed-next-bin" "$DL_URL"
         wget -O "$INSTALL_TMP/SHA256SUMS" "https://github.com/$REPO/releases/latest/download/SHA256SUMS"
     fi
+    BIN_SRC="$INSTALL_TMP/daed-next-bin"
     EXPECTED="$(awk -v name="daed-next-linux-$ARCH" '$2 == name {print $1}' "$INSTALL_TMP/SHA256SUMS")"
     ACTUAL="$(sha256sum "$BIN_SRC" | awk '{print $1}')"
     if [ -z "$EXPECTED" ] || [ "$EXPECTED" != "$ACTUAL" ]; then
@@ -79,38 +76,8 @@ else
     exit 1
 fi
 
-# Install the bundled core before starting the panel.
-CORE_SRC="$SCRIPT_DIR/dae-linux-$ARCH"
-if [ ! -f "$CORE_SRC" ]; then
-    echo "[错误] 安装目录缺少 dae 内核，请下载 v1.0.4 或更新版本的完整安装包。"
-    exit 1
-fi
-chmod 0755 "$CORE_SRC"
-"$CORE_SRC" --version
-for asset in geoip.dat geosite.dat DAE-LICENSE CORE-NOTICE.txt dae-source.tar.gz dae-core.json; do
-    if [ ! -s "$SCRIPT_DIR/$asset" ]; then
-        echo "[错误] 安装包缺少 $asset"; exit 1
-    fi
-done
-mkdir -p /usr/bin /usr/share/dae /usr/share/doc/daed-next
-# Same-directory rename permits replacing an executable that is still running.
-CORE_TMP="$(mktemp /usr/bin/.dae-install.XXXXXX)"
-cp "$CORE_SRC" "$CORE_TMP"
-chmod 0755 "$CORE_TMP"
-mv "$CORE_TMP" /usr/bin/dae
-for asset in geoip.dat geosite.dat; do
-    DATA_TMP="$(mktemp /usr/share/dae/.data-install.XXXXXX)"
-    cp "$SCRIPT_DIR/$asset" "$DATA_TMP"
-    chmod 0644 "$DATA_TMP"
-    mv "$DATA_TMP" "/usr/share/dae/$asset"
-done
-for asset in DAE-LICENSE CORE-NOTICE.txt dae-source.tar.gz dae-core.json; do
-    cp "$SCRIPT_DIR/$asset" "/usr/share/doc/daed-next/$asset"
-    chmod 0644 "/usr/share/doc/daed-next/$asset"
-done
-
 # Backup existing config.dae safely if present
-mkdir -p /etc/dae/daed-next
+mkdir -p /etc/dae/daed-next /usr/share/dae /var/log/dae
 if [ -f /etc/dae/config.dae ] && [ ! -f /etc/dae/config.dae.orig_bak ]; then
     cp -p /etc/dae/config.dae /etc/dae/config.dae.orig_bak
     echo "[备份] 已自动备份原有配置至 /etc/dae/config.dae.orig_bak"
@@ -121,10 +88,66 @@ umask 022
 
 # 3. Install for OpenWrt/iStoreOS (procd) vs Generic Linux (systemd)
 if [ -f /etc/openwrt_release ] || [ -f /etc/rc.common ]; then
-    echo "[2/4] 识别为 OpenWrt / iStoreOS 系统，正在安装服务与 LuCI 菜单..."
-    /etc/init.d/daed-next stop >/dev/null 2>&1 || true
+    echo "[2/5] 识别为 OpenWrt / iStoreOS 系统，正在安装服务与 LuCI 菜单..."
+    /etc/init.d/daed-next stop </dev/null >/dev/null 2>&1 || true
     cp -f "$BIN_SRC" /usr/bin/daed-next
     chmod 0755 /usr/bin/daed-next
+
+    # Auto-heal /etc/init.d/dae & /etc/config/dae so dae core is managed cleanly across reboots
+    if [ ! -f /etc/init.d/dae ]; then
+        cat << 'DAEINITEOF' > /etc/init.d/dae
+#!/bin/sh /etc/rc.common
+START=99
+STOP=10
+USE_PROCD=1
+
+PROG="/usr/bin/dae"
+
+start_service() {
+    config_load "dae"
+    local enabled config_file log_maxbackups log_maxsize
+    config_get_bool enabled "config" "enabled" "1"
+    [ "$enabled" -eq "1" ] || return 0
+    config_get config_file "config" "config_file" "/etc/dae/config.dae"
+    config_get log_maxbackups "config" "log_maxbackups" "1"
+    config_get log_maxsize "config" "log_maxsize" "5"
+
+    [ -x "$PROG" ] || return 1
+    [ -f "$config_file" ] || return 1
+    mkdir -p /var/log/dae
+    chmod 0600 "$config_file" 2>/dev/null || true
+
+    procd_open_instance "dae"
+    procd_set_param command "$PROG" run -c "$config_file" --logfile /var/log/dae/dae.log --logfile-maxbackups "$log_maxbackups" --logfile-maxsize "$log_maxsize"
+    procd_set_param limits memlock="unlimited" nofile="1048576 1048576"
+    procd_set_param respawn
+    procd_close_instance
+}
+
+reload_service() {
+    local pid
+    pid="$(pgrep -f "^$PROG run" | head -n1)"
+    if [ -n "$pid" ]; then
+        "$PROG" reload "$pid"
+    else
+        restart
+    fi
+}
+DAEINITEOF
+        chmod 0755 /etc/init.d/dae
+        echo "[补齐] 已自动创建 /etc/init.d/dae 系统守护脚本"
+    fi
+
+    if [ ! -f /etc/config/dae ] || ! grep -q "config dae 'config'" /etc/config/dae 2>/dev/null; then
+        cat << 'DAECFG' > /etc/config/dae
+config dae 'config'
+	option enabled '1'
+	option config_file '/etc/dae/config.dae'
+	option log_maxbackups '1'
+	option log_maxsize '5'
+DAECFG
+        chmod 0600 /etc/config/dae
+    fi
 
     cat << 'INITEOF' > /etc/init.d/daed-next
 #!/bin/sh /etc/rc.common
@@ -195,19 +218,54 @@ return view.extend({
 VIEWEOF
         rm -f /tmp/luci-indexcache*
         rm -rf /tmp/luci-modulecache/*
-        /etc/init.d/rpcd reload >/dev/null 2>&1 || true
+        /etc/init.d/rpcd reload </dev/null >/dev/null 2>&1 || true
     fi
 
-    echo "[3/4] 正在启用开机自启并启动 DaeStudio 服务..."
-    /etc/init.d/daed-next enable
-    /etc/init.d/daed-next restart
+    echo "[3/5] 正在检测 dae 内核与 GeoIP / GeoSite 分流数据库..."
+    if [ "${DAED_SKIP_BOOTSTRAP:-0}" != "1" ]; then
+        if [ ! -x /usr/bin/dae ] || [ ! -f /usr/share/dae/geoip.dat ] || [ ! -f /usr/share/dae/geosite.dat ]; then
+            /usr/bin/daed-next -bootstrap-env -dae-bin /usr/bin/dae -config /etc/dae/config.dae || \
+                echo "[提示] 在线自动下载内核或分流库未完成（可能当前网络受限），稍后可在面板网页端一键下载安装。"
+        else
+            echo "[自检] 已检测到 /usr/bin/dae 内核与分流数据库"
+        fi
+    fi
+    if [ -x /usr/bin/dae ]; then
+        /etc/init.d/dae enable </dev/null >/dev/null 2>&1 || true
+    fi
+
+    echo "[4/5] 正在启用开机自启并启动 DaeStudio 服务..."
+    /etc/init.d/daed-next enable </dev/null >/dev/null 2>&1 || true
+    /etc/init.d/daed-next restart </dev/null >/dev/null 2>&1
 else
-    echo "[2/4] 识别为通用 Linux (systemd) 系统，正在注册服务..."
+    echo "[2/5] 识别为通用 Linux (systemd) 系统，正在注册服务..."
     systemctl stop daed-next >/dev/null 2>&1 || true
     cp -f "$BIN_SRC" /usr/local/bin/daed-next
     chmod 0755 /usr/local/bin/daed-next
 
     DAE_PATH="$(command -v dae || echo /usr/bin/dae)"
+    if [ ! -f /etc/systemd/system/dae.service ] && [ ! -f /lib/systemd/system/dae.service ] && [ ! -f /usr/lib/systemd/system/dae.service ]; then
+        cat << DAESVCEOF > /etc/systemd/system/dae.service
+[Unit]
+Description=dae Transparent Proxy Kernel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=$DAE_PATH run --disable-timestamp -c /etc/dae/config.dae
+ExecReload=$DAE_PATH reload \$MAINPID
+Restart=on-failure
+RestartSec=3s
+LimitNPROC=512
+LimitNOFILE=1048576
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target
+DAESVCEOF
+    fi
+
     cat << SVCEOF > /etc/systemd/system/daed-next.service
 [Unit]
 Description=DaeStudio (daed-next) Control Plane for dae
@@ -227,19 +285,32 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 SVCEOF
 
-    echo "[3/4] 正在重载 systemd 并启动 DaeStudio..."
+    echo "[3/5] 正在检测 dae 内核与 GeoIP / GeoSite 分流数据库..."
+    if [ "${DAED_SKIP_BOOTSTRAP:-0}" != "1" ]; then
+        if [ ! -x "$DAE_PATH" ] || [ ! -f /usr/share/dae/geoip.dat ] || [ ! -f /usr/share/dae/geosite.dat ]; then
+            /usr/local/bin/daed-next -bootstrap-env -dae-bin "$DAE_PATH" -config /etc/dae/config.dae || \
+                echo "[提示] 在线自动下载内核或分流库未完成，稍后可在面板网页端一键下载安装。"
+        else
+            echo "[自检] 已检测到 $DAE_PATH 内核与分流数据库"
+        fi
+    fi
+
+    echo "[4/5] 正在重载 systemd 并启动 DaeStudio..."
     systemctl daemon-reload
+    if [ -x "$DAE_PATH" ]; then
+        systemctl enable dae >/dev/null 2>&1 || true
+    fi
     systemctl enable --now daed-next
 fi
 
-# 4. Detect LAN IP for convenience
+# 5. Detect LAN IP for convenience
 LAN_IP="$(ip -4 addr show br-lan 2>/dev/null | awk '/inet / {split($2,a,"/"); print a[1]; exit}')"
 if [ -z "$LAN_IP" ]; then
     LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 fi
 [ -z "$LAN_IP" ] && LAN_IP="<设备IP>"
 
-echo "[4/4] 安装完成！"
+echo "[5/5] 安装完成！"
 echo "============================================================"
 echo "  访问地址 : http://${LAN_IP}:2023"
 echo "  LuCI入口 : 软路由后台 -> 服务 -> DaeStudio 面板"
