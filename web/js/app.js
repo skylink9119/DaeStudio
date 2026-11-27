@@ -58,7 +58,7 @@ async function loadBootstrap() {
   try {
     const data = await apiFetch("/api/v1/bootstrap");
     store.state = normalizeState(data.state);
-    store.panelVersion = data.panelVersion || store.panelVersion || "v1.0.9";
+    store.panelVersion = data.panelVersion || store.panelVersion || "v1.0.10";
     store.updateRepo = data.updateRepo ?? store.state?.updateRepo ?? "";
     store.geoDataStatus = data.geoDataStatus || store.geoDataStatus;
     store.configDae = data.configDae || "";
@@ -3212,9 +3212,9 @@ function renderSysLogs(container) {
           <div>
             <div style="display:flex;align-items:center;gap:8px;">
               <span class="panel-title">DaeStudio 面板更新</span>
-              <span class="tag tag-primary mono">${escapeHTML(store.panelVersion || "v1.0.9")}</span>
+              <span class="tag tag-primary mono">${escapeHTML(store.panelVersion || "v1.0.10")}</span>
             </div>
-            <div id="panel-update-status" class="section-sub" aria-live="polite">当前版本 ${escapeHTML(store.panelVersion || "v1.0.9")} · 支持在线检测与 SHA-256 校验升级</div>
+            <div id="panel-update-status" class="section-sub" aria-live="polite">当前版本 ${escapeHTML(store.panelVersion || "v1.0.10")} · 支持在线检测与 SHA-256 校验升级</div>
           </div>
           <div class="toolbar">
             <a id="panel-release-link" class="btn btn-sm hidden" target="_blank" rel="noopener noreferrer">发行说明</a>

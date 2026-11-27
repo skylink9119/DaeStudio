@@ -30,7 +30,54 @@ def deb_data(path):
         pos += 60 + size + size % 2
     raise AssertionError("missing data.tar.gz")
 
+def protobuf_fields(data):
+    pos = 0
+    def varint():
+        nonlocal pos
+        value, shift = 0, 0
+        while True:
+            byte = data[pos]
+            pos += 1
+            value |= (byte & 127) << shift
+            if byte < 128:
+                return value
+            shift += 7
+    while pos < len(data):
+        key = varint()
+        wire = key & 7
+        if wire == 2:
+            size = varint()
+            value = data[pos:pos + size]
+            pos += size
+            yield key >> 3, value
+        elif wire == 0:
+            varint()
+        elif wire == 1:
+            pos += 8
+        elif wire == 5:
+            pos += 4
+        else:
+            raise ValueError("Unsupported protobuf field")
+
+def database_codes(path):
+    codes = set()
+    for field, entry in protobuf_fields(path.read_bytes()):
+        if field == 1:
+            for number, value in protobuf_fields(entry):
+                if number == 1:
+                    codes.add(value.decode().lower())
+    return codes
+
 class ReleasePackages(unittest.TestCase):
+    def test_default_geo_references_exist(self):
+        import re
+        profile = (DIST.parent / "internal/model/default_profile.json").read_text()
+        for kind in ("geosite", "geoip"):
+            codes = database_codes(DIST / "core" / (kind + ".dat"))
+            references = set(re.findall(kind + r":([a-zA-Z0-9_!.-]+)", profile))
+            self.assertTrue(references)
+            self.assertFalse(references - codes, f"Missing {kind} categories: {references - codes}")
+
     def check_payload(self, files, core, machine, prefix):
         profile = (DIST.parent / "internal/model/default_profile.json").read_bytes()
         panels = [data for name, data in files.items()
